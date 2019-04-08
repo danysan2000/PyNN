@@ -2,7 +2,7 @@
 """
 NEST v2 implementation of the PyNN API.
 
-:copyright: Copyright 2006-2015 by the PyNN team, see AUTHORS.
+:copyright: Copyright 2006-2016 by the PyNN team, see AUTHORS.
 :license: CeCILL, see LICENSE for details.
 
 """
@@ -11,12 +11,11 @@ import numpy
 import nest
 import logging
 from pyNN import common, errors
-from pyNN.parameters import Sequence, ParameterSpace, simplify
+from pyNN.parameters import ArrayParameter, Sequence, ParameterSpace, simplify, LazyArray
 from pyNN.random import RandomDistribution
 from pyNN.standardmodels import StandardCellType
 from . import simulator
 from .recording import Recorder, VARIABLE_MAP
-from .conversion import make_sli_compatible
 
 logger = logging.getLogger("PyNN")
 
@@ -47,10 +46,17 @@ class PopulationMixin(object):
         if "spike_times" in names:
             parameter_dict = {"spike_times": [Sequence(value) for value in nest.GetStatus(ids, names)]}
         else:
-            parameter_array = numpy.array(nest.GetStatus(ids, names))
-            parameter_dict = dict((name, simplify(parameter_array[:, col]))
-                                  for col, name in enumerate(names))
-        return ParameterSpace(parameter_dict, shape=(self.local_size,))
+            parameter_dict = {}
+            for name in names:  # one name at a time, since some parameter values may be tuples
+                val = numpy.array(nest.GetStatus(ids, name))
+                if isinstance(val[0], tuple) or len(val.shape) == 2:
+                    val = numpy.array([ArrayParameter(v) for v in val])
+                    val = LazyArray(simplify(val), shape=(self.local_size,), dtype=ArrayParameter)
+                    parameter_dict[name] = val
+                else:
+                    parameter_dict[name] = simplify(val)
+        ps = ParameterSpace(parameter_dict, shape=(self.local_size,))
+        return ps
 
 
 class Assembly(common.Assembly):
@@ -69,6 +75,8 @@ def _build_params(parameter_space, mask_local, size=None, extra_parameters=None)
     Return either a single parameter dict or a list of dicts, suitable for use
     in Create or SetStatus.
     """
+    if "UNSUPPORTED" in parameter_space.keys():
+        parameter_space.pop("UNSUPPORTED")
     if size:
         parameter_space.shape = (size,)
     if parameter_space.is_homogeneous:
@@ -77,15 +85,17 @@ def _build_params(parameter_space, mask_local, size=None, extra_parameters=None)
         if extra_parameters:
             cell_parameters.update(extra_parameters)
         for name, val in cell_parameters.items():
-            if isinstance(val, Sequence):
-                cell_parameters[name] = val.value
+            if isinstance(val, ArrayParameter):
+                cell_parameters[name] = val.value.tolist()
     else:
         parameter_space.evaluate(mask=mask_local)
-        cell_parameters = list(parameter_space) # may not be the most efficient way. Might be best to set homogeneous parameters on creation, then inhomogeneous ones using SetStatus. Need some timings.
+        cell_parameters = list(parameter_space)  # may not be the most efficient way.
+        # Might be best to set homogeneous parameters on creation,
+        # then inhomogeneous ones using SetStatus. Need some timings.
         for D in cell_parameters:
             for name, val in D.items():
-                if isinstance(val, Sequence):
-                    D[name] = val.value
+                if isinstance(val, ArrayParameter):
+                    D[name] = val.value.tolist()
             if extra_parameters:
                 D.update(extra_parameters)
     return cell_parameters
@@ -126,7 +136,9 @@ class Population(common.Population, PopulationMixin):
         except nest.NESTError as err:
             if "UnknownModelName" in err.args[0] and "cond" in err.args[0]:
                 raise errors.InvalidModelError("%s Have you compiled NEST with the GSL (Gnu Scientific Library)?" % err)
-            raise #errors.InvalidModelError(err)
+            if "Spike times must be sorted in non-descending order" in err.args[0]:
+                raise errors.InvalidParameterValueError("Spike times given to SpikeSourceArray must be in increasing order")
+            raise  # errors.InvalidModelError(err)
         # create parrot neurons if necessary
         if hasattr(self.celltype, "uses_parrot") and self.celltype.uses_parrot:
             self.all_cells_source = numpy.array(self.all_cells)        # we put the parrots into all_cells, since this will

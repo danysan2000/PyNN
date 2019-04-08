@@ -5,7 +5,6 @@ except ImportError:
     izip = zip  # Python 3 zip returns an iterator already
 from pyNN import common
 from pyNN.core import ezip
-from pyNN.parameters import ParameterSpace
 from pyNN.space import Space
 from . import simulator
 
@@ -39,7 +38,7 @@ class Projection(common.Projection):
                                    connector, synapse_type, source, receptor_type,
                                    space, label)
 
-        ## Create connections
+        #  Create connections
         self.connections = []
         connector.connect(self)
 
@@ -47,7 +46,6 @@ class Projection(common.Projection):
         return len(self.connections)
 
     def set(self, **attributes):
-        #parameter_space = ParameterSpace
         raise NotImplementedError
 
     def _convergent_connect(self, presynaptic_indices, postsynaptic_index,

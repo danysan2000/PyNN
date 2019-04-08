@@ -2,7 +2,7 @@
 """
 NEST v2 implementation of the PyNN API.
 
-:copyright: Copyright 2006-2015 by the PyNN team, see AUTHORS.
+:copyright: Copyright 2006-2016 by the PyNN team, see AUTHORS.
 :license: CeCILL, see LICENSE for details.
 
 """
@@ -24,7 +24,6 @@ from .conversion import make_sli_compatible
 
 logger = logging.getLogger("PyNN")
 
-
 def listify(obj):
     if isinstance(obj, numpy.ndarray):
         return obj.astype(float).tolist()
@@ -45,7 +44,8 @@ class Projection(common.Projection):
         common.Projection.__init__(self, presynaptic_population, postsynaptic_population,
                                    connector, synapse_type, source, receptor_type,
                                    space, label)
-        self.nest_synapse_model = self.synapse_type._get_nest_synapse_model("projection_%d" % Projection._nProj)
+        self.nest_synapse_model = self.synapse_type._get_nest_synapse_model()
+        self.nest_synapse_label = Projection._nProj
         self.synapse_type._set_tau_minus(self.post.local_cells)
         self._sources = []
         self._connections = None
@@ -57,7 +57,6 @@ class Projection(common.Projection):
 
         # Create connections
         connector.connect(self)
-        self._set_tsodyks_params()
 
     def __getitem__(self, i):
         """Return the `i`th connection on the local MPI node."""
@@ -65,22 +64,33 @@ class Projection(common.Projection):
             if i < len(self):
                 return simulator.Connection(self, i)
             else:
-                raise IndexError("%d > %d" % (i, len(self)-1))
+                raise IndexError("%d > %d" % (i, len(self) - 1))
         elif isinstance(i, slice):
             if i.stop < len(self):
                 return [simulator.Connection(self, j) for j in range(i.start, i.stop, i.step or 1)]
             else:
-                raise IndexError("%d > %d" % (i.stop, len(self)-1))
+                raise IndexError("%d > %d" % (i.stop, len(self) - 1))
 
     def __len__(self):
         """Return the number of connections on the local MPI node."""
-        return nest.GetDefaults(self.nest_synapse_model)['num_connections']
+        #Disabling the following method pending resolution of https://github.com/nest/nest-simulator/issues/1085
+        #local_nodes = nest.GetNodes([0], local_only=True)[0]
+        #local_connections = nest.GetConnections(target=local_nodes,
+        #                                        synapse_model=self.nest_synapse_model,
+        #                                        synapse_label=self.nest_synapse_label)
+        local_connections = self.nest_connections
+        return len(local_connections)
 
     @property
     def nest_connections(self):
         if self._connections is None:
             self._sources = numpy.unique(self._sources)
-            self._connections = nest.GetConnections(self._sources.tolist(), synapse_model=self.nest_synapse_model)
+            if self._sources.size > 0:
+                self._connections = nest.GetConnections(self._sources.tolist(),
+                                                        synapse_model=self.nest_synapse_model,
+                                                        synapse_label=self.nest_synapse_label)
+            else:
+                self._connections = []
         return self._connections
 
     @property
@@ -90,29 +100,28 @@ class Projection(common.Projection):
         """
         return (simulator.Connection(self, i) for i in range(len(self)))
 
-    def _set_tsodyks_params(self):
-        if 'tsodyks' in self.nest_synapse_model:  # there should be a better way to do this. In particular, if the synaptic time constant is changed
-                                              # after creating the Projection, tau_psc ought to be changed as well.
-            assert self.receptor_type in ('excitatory', 'inhibitory'), "only basic synapse types support Tsodyks-Markram connections"
-            logger.debug("setting tau_psc")
-            targets = nest.GetStatus(self.nest_connections, 'target')
-            if self.receptor_type == 'inhibitory':
-                param_name = self.post.local_cells[0].celltype.translations['tau_syn_I']['translated_name']
-            if self.receptor_type == 'excitatory':
-                param_name = self.post.local_cells[0].celltype.translations['tau_syn_E']['translated_name']
-            tau_syn = nest.GetStatus(targets, (param_name))
-            nest.SetStatus(self.nest_connections, 'tau_psc', tau_syn)
-
     def _connect(self, rule_params, syn_params):
         """
-        Create connections by calling nest.Connect on the presynaptic and postsynaptic population
+        Create connections by calling nest. Connect on the presynaptic and postsynaptic population
         with the parameters provided by params.
         """
+        if 'tsodyks' in self.nest_synapse_model:
+            if self.receptor_type == 'inhibitory':
+                param_name = self.post.local_cells[0].celltype.translations['tau_syn_I']['translated_name']
+            elif self.receptor_type == 'excitatory':
+                param_name = self.post.local_cells[0].celltype.translations['tau_syn_E']['translated_name']
+            else:
+                raise NotImplementedError()
+            syn_params.update({'tau_psc': nest.GetStatus([self.nest_connections[0,1]], param_name)})
+           
+                
+        syn_params.update({'synapse_label': self.nest_synapse_label})
         nest.Connect(self.pre.all_cells.astype(int).tolist(),
                      self.post.all_cells.astype(int).tolist(),
                      rule_params, syn_params)
-        self._sources = [cid[0] for cid in nest.GetConnections(synapse_model=self.nest_synapse_model)]
-
+        self._sources = [cid[0] for cid in nest.GetConnections(synapse_model=self.nest_synapse_model,
+                                                               synapse_label=self.nest_synapse_label)]
+    
     def _convergent_connect(self, presynaptic_indices, postsynaptic_index,
                             **connection_parameters):
         """
@@ -140,14 +149,33 @@ class Projection(common.Projection):
         # Setting other connection parameters is done afterwards
         if postsynaptic_cell.celltype.standard_receptor_type:
             try:
-                nest.ConvergentConnect(presynaptic_cells.astype(int).tolist(),
-                                       [int(postsynaptic_cell)],
-                                       listify(weights),
-                                       listify(delays),
-                                       self.nest_synapse_model)
+                if not numpy.isscalar(weights):
+                    weights = numpy.array([weights])
+                if not numpy.isscalar(delays):
+                    delays = numpy.array([delays])
+                syn_dict = {'model': self.nest_synapse_model,
+                            'weight': weights, 'delay': delays,
+                            'synapse_label': self.nest_synapse_label,
+                           }
+
+                if 'tsodyks' in self.nest_synapse_model:
+                    if self.receptor_type == 'inhibitory':
+                        param_name = self.post.local_cells[0].celltype.translations['tau_syn_I']['translated_name']
+                    elif self.receptor_type == 'excitatory':
+                        param_name = self.post.local_cells[0].celltype.translations['tau_syn_E']['translated_name']
+                    else:
+                        raise NotImplementedError()
+                    syn_dict.update({'tau_psc': numpy.array([[nest.GetStatus([postsynaptic_cell], param_name)[0]] * len(presynaptic_cells.astype(int).tolist())])})             
+
+                nest.Connect(presynaptic_cells.astype(int).tolist(),
+                             [int(postsynaptic_cell)],
+                             'all_to_all',
+                             syn_dict)
             except nest.NESTError as e:
-                raise errors.ConnectionError("%s. presynaptic_cells=%s, postsynaptic_cell=%s, weights=%s, delays=%s, synapse model='%s'" % (
-                                             e, presynaptic_cells, postsynaptic_cell, weights, delays, self.nest_synapse_model))
+                errmsg = "%s. presynaptic_cells=%s, postsynaptic_cell=%s, weights=%s, delays=%s, synapse model='%s'" % (
+                            e, presynaptic_cells, postsynaptic_cell,
+                            weights, delays, self.nest_synapse_model)
+                raise errors.ConnectionError(errmsg)
         else:
             receptor_type = postsynaptic_cell.celltype.get_receptor_type(self.receptor_type)
             if numpy.isscalar(weights):
@@ -155,10 +183,16 @@ class Projection(common.Projection):
             if numpy.isscalar(delays):
                 delays = repeat(delays)
             for pre, w, d in zip(presynaptic_cells, weights, delays):
-                nest.Connect([pre], [postsynaptic_cell],
-                             'one_to_one',
-                             {'weight': w, 'delay': d, 'receptor_type': receptor_type,
-                              'model': self.nest_synapse_model})
+
+                syn_dict = {'weight': w, 'delay': d, 'receptor_type': receptor_type,
+                              'model': self.nest_synapse_model,
+                              'synapse_label': self.nest_synapse_label}
+                
+                if 'tsodyks' in self.nest_synapse_model:    
+                   syn_dict.update({'tau_psc': numpy.array([[nest.GetStatus([postsynaptic_cell], param_name)[0]] * len(presynaptic_cells.astype(int).tolist())])}) 
+
+                nest.Connect([pre], [postsynaptic_cell], 'one_to_one', syn_dict)
+
 
         # Book-keeping
         self._connections = None  # reset the caching of the connection list, since this will have to be recalculated
@@ -180,7 +214,8 @@ class Projection(common.Projection):
             sort_indices = numpy.argsort(presynaptic_cells)
             connections = nest.GetConnections(source=numpy.unique(presynaptic_cells.astype(int)).tolist(),
                                               target=[int(postsynaptic_cell)],
-                                              synapse_model=self.nest_synapse_model)
+                                              synapse_model=self.nest_synapse_model,
+                                              synapse_label=self.nest_synapse_label)
             for name, value in connection_parameters.items():
                 value = make_sli_compatible(value)
                 if name not in self._common_synapse_property_names:
@@ -199,10 +234,13 @@ class Projection(common.Projection):
             between local and common synapse properties.
         """
         sample_connection = nest.GetConnections(source=[int(self._sources[0])],
-                                                synapse_model=self.nest_synapse_model)[:1]
+                                                synapse_model=self.nest_synapse_model,
+                                                synapse_label=self.nest_synapse_label)[:1]
+
         local_parameters = nest.GetStatus(sample_connection)[0].keys()
         all_parameters = nest.GetDefaults(self.nest_synapse_model).keys()
-        self._common_synapse_property_names = [name for name in all_parameters if name not in local_parameters]
+        self._common_synapse_property_names = [name for name in all_parameters
+                                               if name not in local_parameters]
 
     def _set_attributes(self, parameter_space):
         parameter_space.evaluate(mask=(slice(None), self.post._mask_local))  # only columns for connections that exist on this machine
@@ -213,7 +251,8 @@ class Projection(common.Projection):
                                                             parameter_space.columns()):
             connections = nest.GetConnections(source=sources,
                                               target=[postsynaptic_cell],
-                                              synapse_model=self.nest_synapse_model)
+                                              synapse_model=self.nest_synapse_model,
+                                              synapse_label=self.nest_synapse_label)
             if connections:
                 source_mask = self.pre.id_to_index([x[0] for x in connections])
                 for name, value in connection_parameters.items():
@@ -248,6 +287,8 @@ class Projection(common.Projection):
                         "Projection was only partially initialized."
                         " Please call sim.nest.reset() to reset "
                         "your network and start over!".format(name))
+        if hasattr(value, "__len__"):
+            value = value[0]
         self._common_synapse_properties[name] = value
         nest.SetDefaults(self.nest_synapse_model, name, value)
 
@@ -280,7 +321,7 @@ class Projection(common.Projection):
     #        file.write(lines, {'pre' : self.pre.label, 'post' : self.post.label})
     #        file.close()
 
-    def _get_attributes_as_list(self, *names):
+    def _get_attributes_as_list(self, names):
         nest_names = []
         for name in names:
             if name == 'presynaptic_index':
@@ -290,33 +331,31 @@ class Projection(common.Projection):
             else:
                 nest_names.append(name)
         values = nest.GetStatus(self.nest_connections, nest_names)
+        values = numpy.array(values)  # ought to preserve int type for source, target
         if 'weight' in names:  # other attributes could also have scale factors - need to use translation mechanisms
-            values = numpy.array(values)  # ought to preserve int type for source, target
             scale_factors = numpy.ones(len(names))
             scale_factors[names.index('weight')] = 0.001
             if self.receptor_type == 'inhibitory' and self.post.conductance_based:
                 scale_factors[names.index('weight')] *= -1  # NEST uses negative values for inhibitory weights, even if these are conductances
             values *= scale_factors
-            values = values.tolist()
         if 'presynaptic_index' in names:
-            values = numpy.array(values)
             values[:, names.index('presynaptic_index')] -= self.pre.first_id
-            values = values.tolist()
         if 'postsynaptic_index' in names:
-            values = numpy.array(values)
             values[:, names.index('postsynaptic_index')] -= self.post.first_id
-            values = values.tolist()
+        values = values.tolist()
         for i in xrange(len(values)):
             values[i] = tuple(values[i])
         return values
 
-    def _get_attributes_as_arrays(self, *names):
+    def _get_attributes_as_arrays(self, names, multiple_synapses='sum'):
+        multi_synapse_operation = Projection.MULTI_SYNAPSE_OPERATIONS[multiple_synapses]
         all_values = []
         for attribute_name in names:
             if attribute_name[-1] == "s":  # weights --> weight, delays --> delay
                 attribute_name = attribute_name[:-1]
             value_arr = numpy.nan * numpy.ones((self.pre.size, self.post.size))
-            connection_attributes = nest.GetStatus(self.nest_connections, ('source', 'target', attribute_name))
+            connection_attributes = nest.GetStatus(self.nest_connections,
+                                                   ('source', 'target', attribute_name))
             for conn in connection_attributes:
                 # (offset is always 0,0 for connections created with connect())
                 src, tgt, value = conn
@@ -324,10 +363,14 @@ class Projection(common.Projection):
                 if numpy.isnan(value_arr[addr]):
                     value_arr[addr] = value
                 else:
-                    value_arr[addr] += value
+                    value_arr[addr] = multi_synapse_operation(value_arr[addr], value)
             if attribute_name == 'weight':
                 value_arr *= 0.001
                 if self.receptor_type == 'inhibitory' and self.post.conductance_based:
                     value_arr *= -1  # NEST uses negative values for inhibitory weights, even if these are conductances
             all_values.append(value_arr)
         return all_values
+
+    def _set_initial_value_array(self, variable, value):
+        local_value = value.evaluate(simplify=True)
+        nest.SetStatus(self.nest_connections, variable, local_value)

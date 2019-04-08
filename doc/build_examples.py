@@ -8,6 +8,7 @@ import tempfile
 import shutil
 import subprocess
 from itertools import cycle
+from datetime import datetime
 
 simulators = cycle(["nest", "neuron"])
 
@@ -34,6 +35,8 @@ examples = (
     "synaptic_input.py",
     "tsodyksmarkram.py",
     "varying_poisson.py",
+    "stochastic_synapses.py",
+    "stochastic_deterministic_comparison.py"
 )
 
 # todo: add line numbering to code examples
@@ -41,9 +44,9 @@ examples = (
 template = """{title}
 {underline}
 
-.. literalinclude:: ../../examples/{example}
-
 .. image:: ../images/examples/{img_file}
+
+.. literalinclude:: ../../examples/{example}
 
 """
 
@@ -61,8 +64,10 @@ examples_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), os.path.
 tmp_dir = tempfile.mkdtemp()
 results_dir = os.path.join(tmp_dir, "Results")
 
-if not os.path.exists(image_dir):
-    os.makedirs(image_dir)
+for dir_name in (image_dir, results_dir):
+    if not os.path.exists(dir_name):
+        os.makedirs(dir_name)
+
 
 def run(python_script, simulator, *extra_args):
     files_initial = list_files(".png")
@@ -83,21 +88,23 @@ def get_title(python_script):
                 break
     return title
 
+
 def list_files(filter):
     return set([os.path.join(x[0], filename)
                 for x in os.walk(results_dir)
                 for filename in x[2]
                 if filter in filename])
 
+print("Running examples in {}".format(tmp_dir))
 for example in examples:
-    new_files = run(example, simulators.next())
+    new_files = run(example, next(simulators))
     if len(new_files) > 1:
         raise Exception("Multiple image files")
     img_path, = new_files
     shutil.copy(img_path, image_dir)
     img_file = os.path.basename(img_path)
     title = get_title(example)
-    underline = "="*len(title)
+    underline = "=" * len(title)
     with open(os.path.join("examples", example.replace(".py", ".txt")), "w") as fp:
         fp.write(template.format(**locals()))
     example_index += "   examples/{}\n".format(example.replace(".py", ""))
@@ -110,15 +117,16 @@ run(example, "nest", cell_type)
 run(example, "neuron", cell_type)
 new_files = list_files("VAbenchmarks").difference(files_initial)
 files_initial = list_files(".png")
-p = subprocess.Popen("python %s/tools/VAbenchmark_graphs.py -o Results/VAbenchmarks_%s.png %s" % (
-                         examples_dir, cell_type, " ".join(new_files)),
+timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+p = subprocess.Popen("python %s/tools/VAbenchmark_graphs.py -o Results/VAbenchmarks_%s_%s.png %s" % (
+                         examples_dir, cell_type, timestamp, " ".join(new_files)),
                      shell=True, cwd=tmp_dir)
 p.wait()
 img_path, = list_files(".png").difference(files_initial)
 shutil.copy(img_path, image_dir)
 img_file = os.path.basename(img_path)
 title = get_title(example)
-underline = "="*len(title)
+underline = "=" * len(title)
 with open(os.path.join("examples", example.replace(".py", ".txt")), "w") as fp:
     fp.write(template.format(**locals()))
 example_index += "   examples/{}\n".format(example.replace(".py", ""))

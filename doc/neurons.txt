@@ -65,7 +65,7 @@ attribute:
 
 .. doctest::
 
-    >>> print IF_cond_exp.default_parameters
+    >>> print(IF_cond_exp.default_parameters)
     {'tau_refrac': 0.1, 'cm': 1.0, 'tau_syn_E': 5.0, 'v_rest': -65.0, 'tau_syn_I': 5.0, 'tau_m': 20.0, 'e_rev_E': 0.0, 'i_offset': 0.0, 'e_rev_I': -70.0, 'v_thresh': -50.0, 'v_reset': -65.0}
 
 
@@ -228,7 +228,7 @@ number of neurons it contains. To iterate over or count populations, use the
 .. doctest::
 
     >>> for p in all_cells.populations:
-    ...    print "%-23s %4d %s" % (p.label, p.size, p.celltype.__class__.__name__)
+    ...    print("%-23s %4d %s" % (p.label, p.size, p.celltype.__class__.__name__))
     Thalamocortical neurons  100 EIF_cond_exp_isfa_ista
     Cortical neurons         500 EIF_cond_exp_isfa_ista
 
@@ -349,8 +349,6 @@ Note that the sampling interval must be an integer multiple of the simulation
 time step (except for simulators which allow use of variable time-step
 integration methods).
 
-.. note:: the option of specifying a sampling interval is not available in version 0.8.0-alpha1. It will be implemented before the final 0.8.0 release.
-
 .. todo:: discuss specifying filename in record()
 
 At the end of a simulation, the recorded data can be retrieved using the
@@ -380,8 +378,8 @@ or written to file using :meth:`write_data()`:
 Neo see the documentation at http://packages.python.org/neo. Here, it will
 suffice to note that a :class:`Block` is the top-level container, and contains
 one or more :class:`Segments`. Each :class:`Segment` is a container for data
-that share a common time basis, and can contain lists of :class:`AnalogSignal`,
-:class:`AnalogSignalArray` and :class:`SpikeTrain` objects. These data objects
+that share a common time basis, and can contain lists of :class:`AnalogSignal`
+and :class:`SpikeTrain` objects. These data objects
 inherit from NumPy array, and so can be treated in further processing (analysis,
 visualization, etc.) in exactly the same way as plain arrays, but in addition
 they carry metadata about units, sampling interval, etc.

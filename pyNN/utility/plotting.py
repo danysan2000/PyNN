@@ -6,7 +6,7 @@ formatting. If you need to produce more complex and/or publication-quality
 figures, it will probably be easier to use matplotlib or another plotting
 package directly rather than trying to extend this module.
 
-:copyright: Copyright 2006-2015 by the PyNN team, see AUTHORS.
+:copyright: Copyright 2006-2016 by the PyNN team, see AUTHORS.
 :license: CeCILL, see LICENSE for details.
 
 """
@@ -19,7 +19,11 @@ import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 import numpy as np
 from quantities import ms
-from neo import AnalogSignalArray, AnalogSignal, SpikeTrain
+from neo import AnalogSignal, SpikeTrain
+try:
+    from sys import maxint
+except ImportError:  # Py3
+    from sys import maxsize as maxint
 
 
 DEFAULT_FIG_SETTINGS = {
@@ -49,7 +53,7 @@ def handle_options(ax, options):
 
 def plot_signal(ax, signal, index=None, label='', **options):
     """
-    Plot an AnalogSignal or one signal from an AnalogSignalArray.
+    Plot a single channel from an AnalogSignal.
     """
     if "ylabel" in options:
         if options["ylabel"] == "auto":
@@ -57,7 +61,7 @@ def plot_signal(ax, signal, index=None, label='', **options):
                                              signal.units._dimensionality.string)
     handle_options(ax, options)
     if index is None:
-        label = "%s (Neuron %d)" % (label, signal.channel_index)
+        label = "%s (Neuron %d)" % (label, signal.channel_index or 0)
     else:
         label = "%s (Neuron %d)" % (label, signal.channel_index[index])
         signal = signal[:, index]
@@ -67,7 +71,7 @@ def plot_signal(ax, signal, index=None, label='', **options):
 
 def plot_signals(ax, signal_array, label_prefix='', **options):
     """
-    Plot all signals in an AnalogSignalArray in a single panel.
+    Plot all channels in an AnalogSignal in a single panel.
     """
     if "ylabel" in options:
         if options["ylabel"] == "auto":
@@ -76,8 +80,8 @@ def plot_signals(ax, signal_array, label_prefix='', **options):
     handle_options(ax, options)
     offset = options.pop("y_offset", None)
     show_legend = options.pop("legend", True)
-    for i in signal_array.channel_index.argsort():
-        channel = signal_array.channel_index[i]
+    for i in signal_array.channel_index.index.argsort():
+        channel = signal_array.channel_index.index[i]
         signal = signal_array[:, i]
         if label_prefix:
             label = "%s (Neuron %d)" % (label_prefix, channel)
@@ -94,16 +98,18 @@ def plot_spiketrains(ax, spiketrains, label='', **options):
     """
     Plot all spike trains in a Segment in a raster plot.
     """
-    ax.set_xlim(0, spiketrains[0].t_stop/ms)
+    ax.set_xlim(0, spiketrains[0].t_stop / ms)
     handle_options(ax, options)
     max_index = 0
+    min_index = maxint
     for spiketrain in spiketrains:
         ax.plot(spiketrain,
                  np.ones_like(spiketrain) * spiketrain.annotations['source_index'],
                  'k.', **options)
         max_index = max(max_index, spiketrain.annotations['source_index'])
+        min_index = min(min_index, spiketrain.annotations['source_index'])
     ax.set_ylabel("Neuron index")
-    ax.set_ylim(-0.5, max_index + 0.5)
+    ax.set_ylim(-0.5 + min_index, max_index + 0.5)
     if label:
         plt.text(0.95, 0.95, label,
                  transform=ax.transAxes, ha='right', va='top',
@@ -137,12 +143,22 @@ def scatterplot(ax, data_table, label='', **options):
                  bbox=dict(facecolor='white', alpha=1.0))
 
 
+def plot_hist(ax, histogram, label='', **options):
+    handle_options(ax, options)
+    for t, n in histogram:
+        ax.bar(t, n, width=histogram.bin_width, color=None)
+    if label:
+        plt.text(0.95, 0.95, label,
+                 transform=ax.transAxes, ha='right', va='top',
+                 bbox=dict(facecolor='white', alpha=1.0))
+
+
 def variable_names(segment):
     """
-    List the names of all the AnalogSignalArrays (used for the variable name by
+    List the names of all the AnalogSignals (used for the variable name by
     PyNN) in the given segment.
     """
-    return set(signal.name for signal in segment.analogsignalarrays)
+    return set(signal.name for signal in segment.analogsignals)
 
 
 class Figure(object):
@@ -173,19 +189,19 @@ class Figure(object):
         else:
             settings = DEFAULT_FIG_SETTINGS
         plt.rcParams.update(settings)
-        width, height = options.get("size", (6, 2*n_panels + 1.2))
+        width, height = options.get("size", (6, 2 * n_panels + 1.2))
         self.fig = plt.figure(1, figsize=(width, height))
         gs = gridspec.GridSpec(n_panels, 1)
         if "annotations" in options:
-            gs.update(bottom=1.2/height)  # leave space for annotations
-        gs.update(top=1 - 0.8/height, hspace=0.25)
+            gs.update(bottom=1.2 / height)  # leave space for annotations
+        gs.update(top=1 - 0.8 / height, hspace=0.25)
         #print(gs.get_grid_positions(self.fig))
 
         for i, panel in enumerate(panels):
             panel.plot(plt.subplot(gs[i, 0]))
 
         if "title" in options:
-            self.fig.text(0.5, 1 - 0.5/height, options["title"],
+            self.fig.text(0.5, 1 - 0.5 / height, options["title"],
                           ha="center", va="top", fontsize="large")
         if "annotations" in options:
             plt.figtext(0.01, 0.01, options["annotations"], fontsize=6, verticalalignment='bottom')
@@ -205,7 +221,7 @@ class Panel(object):
     Represents a single panel in a multi-panel figure.
 
     A panel is a Matplotlib Axes or Subplot instance. A data item may be an
-    AnalogSignal, AnalogSignalArray, or a list of SpikeTrains. The Panel will
+    AnalogSignal, AnalogSignal, or a list of SpikeTrains. The Panel will
     automatically choose an appropriate representation. Multiple data items may
     be plotted in the same panel.
 
@@ -234,9 +250,9 @@ class Panel(object):
             properties.update(self.options)
             if isinstance(datum, DataTable):
                 scatterplot(axes, datum, label=label, **properties)
+            elif isinstance(datum, Histogram):
+                plot_hist(axes, datum, label=label, **properties)
             elif isinstance(datum, AnalogSignal):
-                plot_signal(axes, datum, label=label, **properties)
-            elif isinstance(datum, AnalogSignalArray):
                 plot_signals(axes, datum, label_prefix=label, **properties)
             elif isinstance(datum, list) and len(datum) > 0 and isinstance(datum[0], SpikeTrain):
                 plot_spiketrains(axes, datum, label=label, **properties)
@@ -264,22 +280,34 @@ def comparison_plot(segments, labels, title='', annotations=None,
     n_seg = len(segments)
     by_var_and_channel = defaultdict(lambda: defaultdict(list))
     line_properties = []
+    units = {}
     for k, (segment, label) in enumerate(zip(segments, labels)):
-        lw = 2*(n_seg - k) - 1
-        col = 'rbgmck'[k%6]
+        lw = 2 * (n_seg - k) - 1
+        col = 'bcgmkr'[k % 6]
         line_properties.append({"linewidth": lw, "color": col})
-        for array in segment.analogsignalarrays:
-            for i in array.channel_index.argsort():
-                channel = array.channel_index[i]
+        for array in segment.analogsignals:
+            # rescale signals to the same units, for a given variable name
+            if array.name not in units:
+                units[array.name] = array.units
+            elif array.units != units[array.name]:
+                array = array.rescale(units[array.name])
+            for i in array.channel_index.index.argsort():
+                channel = array.channel_index.index[i]
                 signal = array[:, i]
-                signal.channel_index = channel  # Neo should do this in the previous line
                 by_var_and_channel[array.name][channel].append(signal)
     # each panel plots the signals for a given variable.
     panels = []
     for by_channel in by_var_and_channel.values():
-        panels += [Panel(*array_list,
-                         line_properties=line_properties,
-                         data_labels=labels) for array_list in by_channel.values()]
+        for array_list in by_channel.values():
+            ylabel = array_list[0].name
+            if ylabel:
+                ylabel += " ({})".format(array_list[0].dimensionality)
+            panels.append(
+                Panel(*array_list,
+                      line_properties=line_properties,
+                      yticks=True,
+                      ylabel=ylabel,
+                      data_labels=labels))
     if with_spikes and len(segments[0].spiketrains) > 0:
         panels += [Panel(segment.spiketrains, data_labels=[label])
                    for segment, label in zip(segments, labels)]
@@ -309,3 +337,29 @@ class DataTable(object):
     @property
     def y_fit(self):
         return self._f(self.x, *self._popt)
+
+
+class Histogram(object):
+    """A lightweight encapsulation of histogram data."""
+
+    def __init__(self, data):
+        self.data = data
+        self.evaluated = False
+
+    def evaluate(self):
+        if not self.evaluated:
+            n_bins = int(np.sqrt(len(self.data)))
+            self.values, self.bins = np.histogram(self.data, bins=n_bins)
+            self.bin_width = self.bins[1] - self.bins[0]
+            self.evaluated = True
+
+    def __iter__(self):
+        """Iterate over the bars of the histogram"""
+        self.evaluate()
+        for x, y in zip(self.bins[:-1], self.values):
+            yield (x, y)
+
+
+def isi_histogram(segment):
+    all_isis = np.concatenate([np.diff(np.array(st)) for st in segment.spiketrains])
+    return Histogram(all_isis)

@@ -1,11 +1,12 @@
 """
 Definition of NativeCellType class for NEST.
 
-:copyright: Copyright 2006-2015 by the PyNN team, see AUTHORS.
+:copyright: Copyright 2006-2016 by the PyNN team, see AUTHORS.
 :license: CeCILL, see LICENSE for details.
 """
 
 import warnings
+import numpy as np
 import nest
 from pyNN.models import BaseCellType
 from pyNN.parameters import Sequence
@@ -14,19 +15,22 @@ from . import conversion
 UNITS_MAP = {
     'spikes': 'ms',
     'V_m': 'mV',
+    'I_syn_ex': 'pA',
+    'I_syn_in': 'pA'
 }
 
 
 def get_defaults(model_name):
-    valid_types = (int, float, Sequence)
+    valid_types = (int, float, Sequence, np.ndarray)
     defaults = nest.GetDefaults(model_name)
     variables = defaults.get('recordables', [])
-    ignore = ['archiver_length', 'available', 'capacity', 'elementsize',
-              'frozen', 'instantiations', 'local', 'model', 'recordables',
-              'state', 't_spike', 'tau_minus', 'tau_minus_triplet',
+    ignore = ['archiver_length', 'available', 'Ca', 'capacity', 'elementsize',
+              'frozen', 'instantiations', 'local', 'model', 'needs_prelim_update',
+              'recordables', 'state', 't_spike', 'tau_minus', 'tau_minus_triplet',
               'thread', 'vp', 'receptor_types', 'events', 'global_id',
               'element_type', 'type', 'type_id', 'has_connections', 'n_synapses',
-              'thread_local_id']
+              'thread_local_id', 'node_uses_wfr', 'supports_precise_spikes',
+              'synaptic_elements', 'y_0', 'y_1', 'allow_offgrid_spikes', 'shift_now_spikes']
     default_params = {}
     default_initial_values = {}
     for name, value in defaults.items():

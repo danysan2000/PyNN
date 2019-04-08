@@ -55,7 +55,7 @@ class TestPopulation(unittest.TestCase):
     def setUp(self):
         sim.setup()
         self.p = sim.Population(4, sim.IF_cond_exp(**{'tau_m': 12.3,
-                                                      'cm': lambda i: 0.987 + 0.01*i,
+                                                      'cm': lambda i: 0.987 + 0.01 * i,
                                                       'i_offset': numpy.array([-0.21, -0.20, -0.19, -0.18])}))
 
     def test_create_native(self):
@@ -103,6 +103,8 @@ class TestProjection(unittest.TestCase):
         prj = sim.Projection(self.p1, self.p2, self.all2all,
                              synapse_type=sim.TsodyksMarkramSynapse())
 
+
+    @unittest.skip("causes core dump with NEST master branch")
     def test_create_with_native_synapse(self):
         """
         Native synapse with array-like parameters and CommonProperties.
@@ -129,6 +131,7 @@ class TestProjection(unittest.TestCase):
         weights_array = prj.get("weight", format="array")
         self.assertTrue((weights_array > 0.).all())
 
+    @unittest.skip("causes core dump with NEST master branch")
     def test_create_with_homogeneous_common_properties(self):
         with self.assertRaises(ValueError):
             # create synapse type with heterogeneous common parameters
@@ -180,6 +183,20 @@ class TestProjection(unittest.TestCase):
         weight_array = numpy.ones(prj.shape) * weight
         prj.set(weight=weight_array)
         self.assertTrue((weight_array == prj.get("weight", format="array")).all())
+
+    def test_stdp_set_tau_minus(self):
+        """cf https://github.com/NeuralEnsemble/PyNN/issues/423"""
+        intended_tau_minus = 18.9
+        stdp_model = sim.STDPMechanism(
+            timing_dependence=sim.SpikePairRule(tau_plus=16.7, tau_minus=intended_tau_minus,
+                                                A_plus=0.005, A_minus=0.005),
+            weight_dependence=sim.AdditiveWeightDependence(w_min=0.0, w_max=1.0),
+            weight=0.5, delay=1.0, dendritic_delay_fraction=1.0)
+        prj = sim.Projection(self.p1, self.p2, self.all2all,
+                             synapse_type=stdp_model)
+        actual_tau_minus = nest.GetStatus([prj.post[0]], "tau_minus")[0]
+        self.assertEqual(intended_tau_minus, actual_tau_minus)
+
 
 if __name__ == '__main__':
     unittest.main()

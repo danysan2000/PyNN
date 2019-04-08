@@ -2,7 +2,7 @@
 """
 Standard base_cells for the neuron module.
 
-:copyright: Copyright 2006-2015 by the PyNN team, see AUTHORS.
+:copyright: Copyright 2006-2016 by the PyNN team, see AUTHORS.
 :license: CeCILL, see LICENSE for details.
 
 """
@@ -10,7 +10,10 @@ Standard base_cells for the neuron module.
 from pyNN.standardmodels import cells as base_cells, build_translations
 from pyNN.neuron.cells import (StandardIF, SingleCompartmentTraub,
                                RandomSpikeSource, VectorSpikeSource,
-                               BretteGerstnerIF, GsfaGrrIF, Izhikevich_)
+                               RandomGammaSpikeSource,
+                               RandomPoissonRefractorySpikeSource,
+                               BretteGerstnerIF, GsfaGrrIF, Izhikevich_,
+                               GIFNeuron)
 import logging
 
 logger = logging.getLogger("PyNN")
@@ -186,6 +189,31 @@ class SpikeSourcePoisson(base_cells.SpikeSourcePoisson):
     model = RandomSpikeSource
 
 
+class SpikeSourcePoissonRefractory(base_cells.SpikeSourcePoissonRefractory):
+
+    __doc__ = base_cells.SpikeSourcePoissonRefractory.__doc__
+
+    translations = build_translations(
+        ('start',      'start'),
+        ('rate',       'rate'),
+        ('tau_refrac', 'tau_refrac'),
+        ('duration',   'duration'),
+    )
+    model = RandomPoissonRefractorySpikeSource
+
+
+class SpikeSourceGamma(base_cells.SpikeSourceGamma):
+    __doc__ = base_cells.SpikeSourceGamma.__doc__
+
+    translations = build_translations(
+        ('alpha',    'alpha'),
+        ('beta',     'beta',    0.001),
+        ('start',    'start'),
+        ('duration', 'duration'),
+    )
+    model = RandomGammaSpikeSource
+
+
 class SpikeSourceArray(base_cells.SpikeSourceArray):
 
     __doc__ = base_cells.SpikeSourceArray.__doc__
@@ -244,3 +272,28 @@ class Izhikevich(base_cells.Izhikevich):
         ('i_offset', 'i_offset')
     )
     model = Izhikevich_
+
+
+class GIF_cond_exp(base_cells.GIF_cond_exp):
+    translations = build_translations(
+        ('v_rest', 'v_rest'),
+        ('cm', 'c_m'),
+        ('tau_m', 'tau_m'),
+        ('tau_refrac', 't_refrac'),
+        ('tau_syn_E', 'tau_e'),
+        ('tau_syn_I', 'tau_i'),
+        ('e_rev_E', 'e_e'),
+        ('e_rev_I', 'e_i'),
+        ('v_reset', 'v_reset'),
+        ('i_offset', 'i_offset'),
+        ('delta_v', 'dV'),
+        ('v_t_star', 'vt_star'),
+        ('lambda0', 'lambda0'),
+        ('tau_eta', 'tau_eta'),
+        ('tau_gamma', 'tau_gamma'),
+        ('a_eta', 'a_eta'),
+        ('a_gamma', 'a_gamma'),
+    )
+    model = GIFNeuron
+    extra_parameters = {'syn_type': 'conductance',
+                        'syn_shape': 'exp'}

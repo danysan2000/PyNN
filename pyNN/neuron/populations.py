@@ -2,7 +2,7 @@
 """
 nrnpython implementation of the PyNN API.
 
-:copyright: Copyright 2006-2015 by the PyNN team, see AUTHORS.
+:copyright: Copyright 2006-2016 by the PyNN team, see AUTHORS.
 :license: CeCILL, see LICENSE for details.
 
 """
@@ -10,7 +10,7 @@ nrnpython implementation of the PyNN API.
 import numpy
 import logging
 from pyNN import common
-from pyNN.parameters import Sequence, ParameterSpace, simplify
+from pyNN.parameters import ArrayParameter, Sequence, ParameterSpace, simplify, LazyArray
 from pyNN.standardmodels import StandardCellType
 from pyNN.random import RandomDistribution
 from . import simulator
@@ -34,10 +34,17 @@ class PopulationMixin(object):
         """
         parameter_dict = {}
         for name in names:
-            if name == 'spike_times': # hack
+            if name == 'spike_times':  # hack
                 parameter_dict[name] = [Sequence(getattr(id._cell, name)) for id in self]
             else:
-                parameter_dict[name] = simplify(numpy.array([getattr(id._cell, name) for id in self]))
+                val = numpy.array([getattr(id._cell, name) for id in self])
+                if isinstance(val[0], tuple) or len(val.shape) == 2:
+                    val = numpy.array([ArrayParameter(v) for v in val])
+                    val = LazyArray(simplify(val), shape=(self.local_size,), dtype=ArrayParameter)
+                    parameter_dict[name] = val
+                else:
+                    parameter_dict[name] = simplify(val)
+                parameter_dict[name] = simplify(val)
         return ParameterSpace(parameter_dict, shape=(self.local_size,))
 
     def _set_initial_value_array(self, variable, initial_values):
@@ -92,10 +99,13 @@ class Population(common.Population, PopulationMixin):
         # perhaps should check for that
         self.first_id = simulator.state.gid_counter
         self.last_id = simulator.state.gid_counter + self.size - 1
-        self.all_cells = numpy.array([id for id in range(self.first_id, self.last_id+1)], 
+        self.all_cells = numpy.array([id for id in range(self.first_id, self.last_id + 1)], 
                                      simulator.ID)
+
         # mask_local is used to extract those elements from arrays that apply to the cells on the current node
-        self._mask_local = self.all_cells%simulator.state.num_processes==simulator.state.mpi_rank # round-robin distribution of cells between nodes
+        # round-robin distribution of cells between nodes
+        self._mask_local = self.all_cells % simulator.state.num_processes == simulator.state.mpi_rank
+
         if isinstance(self.celltype, StandardCellType):
             parameter_space = self.celltype.native_parameters
         else:
@@ -120,5 +130,5 @@ class Population(common.Population, PopulationMixin):
         assert isinstance(rand_distr.rng, NativeRNG)
         rng = simulator.h.Random(rand_distr.rng.seed or 0)
         native_rand_distr = getattr(rng, rand_distr.name)
-        rarr = [native_rand_distr(*rand_distr.parameters)] + [rng.repick() for i in range(self.all_cells.size-1)]
+        rarr = [native_rand_distr(*rand_distr.parameters)] + [rng.repick() for i in range(self.all_cells.size - 1)]
         self.tset(parametername, rarr)

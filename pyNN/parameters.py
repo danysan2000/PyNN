@@ -1,7 +1,7 @@
 """
 Parameter set handling
 
-:copyright: Copyright 2006-2015 by the PyNN team, see AUTHORS.
+:copyright: Copyright 2006-2016 by the PyNN team, see AUTHORS.
 :license: CeCILL, see LICENSE for details.
 """
 
@@ -86,22 +86,21 @@ class LazyArray(larray):
         if isinstance(self.base_value, RandomDistribution) and self.base_value.rng.parallel_safe:
             if mask is None:
                 for j in column_indices:
-                    yield self._apply_operations(self.base_value.next(self.nrows, mask_local=False),
-                                                 (slice(None), j))
+                    yield self._partially_evaluate((slice(None), j), simplify=True)
             else:
                 column_indices = numpy.arange(self.ncols)
-                for j,local in zip(column_indices, mask):
-                    col = self.base_value.next(self.nrows, mask_local=False)
+                for j, local in zip(column_indices, mask):
+                    col = self._partially_evaluate((slice(None), j), simplify=True)
                     if local:
-                        yield self._apply_operations(col, (slice(None), j))
+                        yield col
         else:
             for j in column_indices:
                 yield self._partially_evaluate((slice(None), j), simplify=True)
 
 
-class Sequence(object):
+class ArrayParameter(object):
     """
-    Represents a sequence of numerical values.
+    Represents a parameter whose value consists of multiple values, e.g. a tuple or array.
 
     The reason for defining this class rather than just using a NumPy array is
     to avoid the ambiguity of "is a given array a single parameter value (e.g.
@@ -111,12 +110,11 @@ class Sequence(object):
     Arguments:
         `value`:
             anything which can be converted to a NumPy array, or another
-            :class:`Sequence` object.
+            :class:`ArrayParameter` object.
     """
-    # should perhaps use neo.SpikeTrain and neo.EventArray instead of this class?
 
     def __init__(self, value):
-        if isinstance(value, Sequence):
+        if isinstance(value, ArrayParameter):
             self.value = value.value
         elif isinstance(value, numpy.ndarray):
             # dont overwrite dtype of int arrays
@@ -124,81 +122,96 @@ class Sequence(object):
         else:
             self.value = numpy.array(value, float)
 
-    #def __len__(self):
-    #    This must not be defined, otherwise Sequence is insufficiently different from NumPy array
+    # def __len__(self):
+    #     This must not be defined, otherwise ArrayParameter is insufficiently different from NumPy array
 
     def max(self):
-        """Return the maximum value from the sequence."""
+        """Return the maximum value."""
         return self.value.max()
 
     def __add__(self, val):
         """
-        Return a new :class:`Sequence` in which all values in the original
-        :class:`Sequence` have `val` added to them.
+        Return a new :class:`ArrayParameter` in which all values in the original
+        :class:`ArrayParameter` have `val` added to them.
 
-        If `val` is itself an array, return an array of :class:`Sequence`
-        objects, where sequence `i` is the original sequence added to
+        If `val` is itself an array, return an array of :class:`ArrayParameter`
+        objects, where ArrayParameter `i` is the original ArrayParameter added to
         element `i` of val.
         """
         if hasattr(val, '__len__'):
-            return numpy.array([Sequence(self.value + x) for x in val], dtype=Sequence) # reshape if necessary?
+            return numpy.array([self.__class__(self.value + x) for x in val], dtype=self.__class__)  # reshape if necessary?
         else:
-            return Sequence(self.value + val)
+            return self.__class__(self.value + val)
 
     def __sub__(self, val):
         """
-        Return a new :class:`Sequence` in which all values in the original
-        :class:`Sequence` have `val` subtracted from them.
+        Return a new :class:`ArrayParameter` in which all values in the original
+        :class:`ArrayParameter` have `val` subtracted from them.
 
-        If `val` is itself an array, return an array of :class:`Sequence`
-        objects, where sequence `i` is the original sequence with
+        If `val` is itself an array, return an array of :class:`ArrayParameter`
+        objects, where ArrayParameter `i` is the original ArrayParameter with
         element `i` of val subtracted from it.
         """
         if hasattr(val, '__len__'):
-            return numpy.array([Sequence(self.value - x) for x in val], dtype=Sequence) # reshape if necessary?
+            return numpy.array([self.__class__(self.value - x) for x in val], dtype=self.__class__)  # reshape if necessary?
         else:
-            return Sequence(self.value - val)
+            return self.__class__(self.value - val)
 
     def __mul__(self, val):
         """
-        Return a new :class:`Sequence` in which all values in the original
-        :class:`Sequence` have been multiplied by `val`.
+        Return a new :class:`ArrayParameter` in which all values in the original
+        :class:`ArrayParameter` have been multiplied by `val`.
 
-        If `val` is itself an array, return an array of :class:`Sequence`
-        objects, where sequence `i` is the original sequence multiplied by
+        If `val` is itself an array, return an array of :class:`ArrayParameter`
+        objects, where ArrayParameter `i` is the original ArrayParameter multiplied by
         element `i` of `val`.
         """
         if hasattr(val, '__len__'):
-            return numpy.array([Sequence(self.value * x) for x in val], dtype=Sequence) # reshape if necessary?
+            return numpy.array([self.__class__(self.value * x) for x in val], dtype=self.__class__)  # reshape if necessary?
         else:
-            return Sequence(self.value * val)
+            return self.__class__(self.value * val)
 
     __rmul__ = __mul__
 
     def __div__(self, val):
         """
-        Return a new :class:`Sequence` in which all values in the original
-        :class:`Sequence` have been divided by `val`.
+        Return a new :class:`ArrayParameter` in which all values in the original
+        :class:`ArrayParameter` have been divided by `val`.
 
-        If `val` is itself an array, return an array of :class:`Sequence`
-        objects, where sequence `i` is the original sequence divided by
+        If `val` is itself an array, return an array of :class:`ArrayParameter`
+        objects, where ArrayParameter `i` is the original ArrayParameter divided by
         element `i` of `val`.
         """
         if hasattr(val, '__len__'):
-            return numpy.array([Sequence(self.value/x) for x in val], dtype=Sequence) # reshape if necessary?
+            return numpy.array([self.__class__(self.value / x) for x in val], dtype=self.__class__)  # reshape if necessary?
         else:
-            return Sequence(self.value/val)
+            return self.__class__(self.value / val)
+
+    __truediv__ = __div__  # Python 3
 
     def __eq__(self, other):
-        if isinstance(other, Sequence):
+        if isinstance(other, ArrayParameter):
             return self.value.size == other.value.size and (self.value == other.value).all()
-        elif isinstance(other, numpy.ndarray) and other.size > 0 and isinstance(other[0], Sequence):
+        elif isinstance(other, numpy.ndarray) and other.size > 0 and isinstance(other[0], ArrayParameter):
             return numpy.array([(self == seq).all() for seq in other])
         else:
             return False
 
     def __repr__(self):
-        return "Sequence(%s)" % self.value
+        return "%s(%s)" % (self.__class__.__name__, self.value)
+
+
+class Sequence(ArrayParameter):
+    """
+        Represents a sequence of numerical values.
+
+        Arguments:
+            `value`:
+                anything which can be converted to a NumPy array, or another
+                :class:`Sequence` object.
+    """
+    # should perhaps use neo.SpikeTrain instead of this class, or at least allow a neo SpikeTrain
+    pass
 
 
 class ParameterSpace(object):
@@ -226,7 +239,6 @@ class ParameterSpace(object):
 
     .. _`lazy array`: https://lazyarray.readthedocs.org/
     """
-
     def __init__(self, parameters, schema=None, shape=None, component=None):
         """
 
@@ -286,20 +298,21 @@ class ParameterSpace(object):
                     raise errors.NonExistentParameterError(name,
                                                            model_name,
                                                            valid_parameter_names=self.schema.keys())
-                if (expected_dtype == Sequence
-                    and isinstance(value, collections.Sized)
-                    and not isinstance(value[0], Sequence)): # may be a more generic way to do it, but for now this special-casing seems like the most robust approach
-                    if isinstance(value[0], collections.Sized):  # e.g. list of tuples
-                        value = type(value)([Sequence(x) for x in value])
-                    else:
-                        value = Sequence(value)
+                if issubclass(expected_dtype, ArrayParameter) and isinstance(value, collections.Sized):
+                    if len(value) == 0:
+                        value = ArrayParameter([])
+                    elif not isinstance(value[0], ArrayParameter):  # may be a more generic way to do it, but for now this special-casing seems like the most robust approach
+                        if isinstance(value[0], collections.Sized):  # e.g. list of tuples
+                            value = type(value)([ArrayParameter(x) for x in value])
+                        else:
+                            value = ArrayParameter(value)
                 try:
                     self._parameters[name] = LazyArray(value, shape=self._shape,
                                                        dtype=expected_dtype)
                 except (TypeError, errors.InvalidParameterValueError):
                     raise errors.InvalidParameterValueError("For parameter %s expected %s, got %s" % (name, expected_dtype, type(value)))
                 except ValueError as err:
-                    raise errors.InvalidDimensionsError(err) # maybe put the more specific error classes into lazyarray
+                    raise errors.InvalidDimensionsError(err)  # maybe put the more specific error classes into lazyarray
         else:
             for name, value in parameters.items():
                 self._parameters[name] = LazyArray(value, shape=self._shape)
@@ -311,6 +324,16 @@ class ParameterSpace(object):
     def __setitem__(self, name, value):
         # need to add check against schema
         self._parameters[name] = value
+
+    def pop(self, name, d=None):
+        """
+        Remove the given parameter from the parameter set and from its schema,
+        and return its value.
+        """
+        value = self._parameters.pop(name, d)
+        if self.schema:
+            self.schema.pop(name, d)
+        return value
 
     @property
     def is_homogeneous(self):
@@ -349,7 +372,7 @@ class ParameterSpace(object):
         D = {}
         for name, value in self._parameters.items():
             D[name] = value
-            assert not isinstance(D[name], LazyArray) # should all have been evaluated by now
+            assert not isinstance(D[name], LazyArray)  # should all have been evaluated by now
         return D
 
     def __iter__(self):
@@ -382,7 +405,7 @@ class ParameterSpace(object):
                     D[name] = value[i]
                 else:
                     D[name] = value
-                assert not isinstance(D[name], LazyArray) # should all have been evaluated by now
+                assert not isinstance(D[name], LazyArray)  # should all have been evaluated by now
             yield D
 
     def columns(self):
@@ -402,11 +425,11 @@ class ParameterSpace(object):
                         D[name] = value[:, j]
                     else:
                         D[name] = value
-                    assert not isinstance(D[name], LazyArray) # should all have been evaluated by now
+                    assert not isinstance(D[name], LazyArray)  # should all have been evaluated by now
                 yield D
 
     def __eq__(self, other):
-        return (all(a==b for a,b in zip(self._parameters.items(), other._parameters.items()))
+        return (all(a == b for a, b in zip(self._parameters.items(), other._parameters.items()))
                 and self.schema == other.schema
                 and self._shape == other._shape)
 
@@ -430,6 +453,20 @@ class ParameterSpace(object):
         """
         return (value for value in self._parameters.values() if isinstance(value.base_value, RandomDistribution))
 
+    def expand(self, new_shape, mask):
+        """
+        Increase the size of the ParameterSpace.
+
+        Existing array values are mapped to the indices given in mask.
+        New array values are set to NaN.
+        """
+        for name, value in self._parameters.items():
+            if isinstance(value.base_value, numpy.ndarray):
+                new_base_value = numpy.ones(new_shape) * numpy.nan
+                new_base_value[mask] = value.base_value
+                self._parameters[name].base_value = new_base_value
+        self.shape = new_shape
+
 
 def simplify(value):
     """
@@ -437,7 +474,7 @@ def simplify(value):
     share. Otherwise, pass the value through.
     """
     if isinstance(value, numpy.ndarray):
-        if (value==value[0]).all():
+        if (value == value[0]).all():
             return value[0]
         else:
             return value

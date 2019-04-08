@@ -1,13 +1,14 @@
 """
 Synapse Dynamics classes for the neuron module.
 
-:copyright: Copyright 2006-2015 by the PyNN team, see AUTHORS.
+:copyright: Copyright 2006-2016 by the PyNN team, see AUTHORS.
 :license: CeCILL, see LICENSE for details.
 
 """
 
 from pyNN.standardmodels import synapses, build_translations
 from pyNN.neuron.simulator import state, Connection, GapJunction, GapJunctionPresynaptic
+
 
 class BaseSynapse(object):
     """
@@ -51,7 +52,8 @@ class STDPMechanism(BaseSynapse, synapses.STDPMechanism):
 
     base_translations = build_translations(
         ('weight', 'weight'),
-        ('delay', 'delay')
+        ('delay', 'delay'),
+        ('dendritic_delay_fraction', 'dendritic_delay_fraction')
     )  # will be extended by translations from timing_dependence, etc.
 
     def __init__(self, timing_dependence=None, weight_dependence=None,
@@ -89,8 +91,54 @@ class TsodyksMarkramSynapse(BaseSynapse, synapses.TsodyksMarkramSynapse):
 
     def _get_minimum_delay(self):
         return state.min_delay
-    
-    
+
+
+class SimpleStochasticSynapse(BaseSynapse, synapses.SimpleStochasticSynapse):
+    translations = build_translations(
+        ('weight', 'weight'),
+        ('delay', 'delay'),
+        ('p', 'p'),
+    )
+    model = 'SimpleStochasticWA'
+    postsynaptic_variable = None
+
+    def _get_minimum_delay(self):
+        return state.min_delay
+
+
+class StochasticTsodyksMarkramSynapse(BaseSynapse, synapses.StochasticTsodyksMarkramSynapse):
+
+    translations = build_translations(
+        ('weight', 'weight'),
+        ('delay', 'delay'),
+        ('U', 'U'),
+        ('tau_rec', 'tau_rec'),
+        ('tau_facil', 'tau_facil'),
+    )
+    model = 'StochasticTsodyksMarkramWA'
+    postsynaptic_variable = None
+
+    def _get_minimum_delay(self):
+        return state.min_delay
+
+
+class MultiQuantalSynapse(BaseSynapse, synapses.MultiQuantalSynapse):
+
+    translations = build_translations(
+        ('weight', 'weight'),
+        ('delay', 'delay'),
+        ('U', 'U'),
+        ('n', 'n'),
+        ('tau_rec', 'tau_rec'),
+        ('tau_facil', 'tau_fac')
+    )
+    model = 'QuantalSTPWA'
+    postsynaptic_variable = None
+
+    def _get_minimum_delay(self):
+        return state.min_delay
+
+
 class AdditiveWeightDependence(BaseSynapse, synapses.AdditiveWeightDependence):
     __doc__ = synapses.AdditiveWeightDependence.__doc__
 
@@ -108,7 +156,7 @@ class MultiplicativeWeightDependence(BaseSynapse, synapses.MultiplicativeWeightD
         ('w_max',     'wmax'),
         ('w_min',     'wmin'),
     )
-    possible_models = set(['StdwaSoft',])
+    possible_models = set(['StdwaSoft'])
 
 
 class AdditivePotentiationMultiplicativeDepression(BaseSynapse, synapses.AdditivePotentiationMultiplicativeDepression):

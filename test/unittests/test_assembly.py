@@ -2,7 +2,7 @@
 Tests of the common implementation of the Assembly class, using the pyNN.mock
 backend.
 
-:copyright: Copyright 2006-2015 by the PyNN team, see AUTHORS.
+:copyright: Copyright 2006-2016 by the PyNN team, see AUTHORS.
 :license: CeCILL, see LICENSE for details.
 """
 
@@ -28,12 +28,15 @@ from pyNN.parameters import Sequence
 
 from .backends.registry import register_class, register
 
+
 def setUp():
     pass
+
 
 def tearDown():
     pass
     
+
 @register_class()
 class AssemblyTest(unittest.TestCase):
 
@@ -128,7 +131,7 @@ class AssemblyTest(unittest.TestCase):
         a1 = sim.Assembly(p1, p2)
         a2 = sim.Assembly(p2, p3)
         a3 = a1 + a2
-        self.assertEqual(a3.populations, [p1, p2, p3]) # or do we want [p1, p2, p3]?
+        self.assertEqual(a3.populations, [p1, p2, p3])  # or do we want [p1, p2, p3]?
     
     @register()
     def test_add_inplace_population(self, sim=sim):
@@ -226,18 +229,17 @@ class AssemblyTest(unittest.TestCase):
         import os
         p1 = sim.Population(2, sim.IF_cond_exp())
         p2 = sim.Population(2, sim.IF_cond_exp())
-        p1.positions = numpy.arange(0,6).reshape((2,3)).T
-        p2.positions = numpy.arange(6,12).reshape((2,3)).T
+        p1.positions = numpy.arange(0, 6).reshape((2, 3)).T
+        p2.positions = numpy.arange(6, 12).reshape((2, 3)).T
         a = sim.Assembly(p1, p2, label="test")
         output_file = Mock()
         a.save_positions(output_file)
         assert_array_equal(output_file.write.call_args[0][0],
-                            numpy.array([[int(p1[0]), 0, 1, 2],
-                                         [int(p1[1]), 3, 4, 5],
-                                         [int(p2[0]), 6, 7, 8],
-                                         [int(p2[1]), 9, 10, 11]]))
+                            numpy.array([[0, 0, 1, 2],
+                                         [1, 3, 4, 5],
+                                         [2, 6, 7, 8],
+                                         [3, 9, 10, 11]]))
         self.assertEqual(output_file.write.call_args[0][1], {'assembly': a.label})
-        # arguably, the first column should contain indices, not ids.
 
     @register()
     def test_repr(self, sim=sim):
@@ -323,7 +325,7 @@ class AssemblyTest(unittest.TestCase):
         p2 = sim.Population(6, sim.IF_cond_alpha())
         p3 = sim.Population(3, sim.IF_curr_exp())
         a = sim.Assembly(p3, p1, p2)
-        self.assertRaises(IndexError, a.id_to_index, p3.last_id+1)
+        self.assertRaises(IndexError, a.id_to_index, p3.last_id + 1)
 
     @register()
     def test_getitem_int(self, sim=sim):
@@ -390,7 +392,7 @@ class AssemblyTest(unittest.TestCase):
         a.record('v')
         sim.run(t1)
         # what if we call p.record between two run statements?
-        # would be nice to get an AnalogSignalArray with a non-zero t_start
+        # would be nice to get an AnalogSignal with a non-zero t_start
         # but then need to make sure we get the right initial value
         sim.run(t2)
         sim.reset()
@@ -400,21 +402,21 @@ class AssemblyTest(unittest.TestCase):
         data = a.get_data(gather=True)
         self.assertEqual(len(data.segments), 2)
         seg0 = data.segments[0]
-        self.assertEqual(len(seg0.analogsignalarrays), 1)
+        self.assertEqual(len(seg0.analogsignals), 1)
         v = seg0.filter(name='v')[0]
         self.assertEqual(v.name, 'v')
-        num_points = int(round((t1 + t2)/sim.get_time_step())) + 1
+        num_points = int(round((t1 + t2) / sim.get_time_step())) + 1
         self.assertEqual(v.shape, (num_points, a.size))
-        self.assertEqual(v.t_start, 0.0*pq.ms)
+        self.assertEqual(v.t_start, 0.0 * pq.ms)
         self.assertEqual(v.units, pq.mV)
-        self.assertEqual(v.sampling_period, 0.1*pq.ms)
+        self.assertEqual(v.sampling_period, 0.1 * pq.ms)
         self.assertEqual(len(seg0.spiketrains), 0)
         
         seg1 = data.segments[1]
-        self.assertEqual(len(seg1.analogsignalarrays), 2)
+        self.assertEqual(len(seg1.analogsignals), 2)
         w = seg1.filter(name='w')[0]
         self.assertEqual(w.name, 'w')
-        num_points = int(round(t3/sim.get_time_step())) + 1
+        num_points = int(round(t3 / sim.get_time_step())) + 1
         self.assertEqual(w.shape, (num_points, p3.size))
         self.assertEqual(v.t_start, 0.0)
         self.assertEqual(len(seg1.spiketrains), a.size)
@@ -512,10 +514,10 @@ class AssemblyTest(unittest.TestCase):
     def test_get_multiple_inhomogeneous_params_with_gather(self, sim=sim):
         p1 = sim.Population(4, sim.IF_cond_exp(tau_m=12.3,
                                                tau_syn_E=[0.987, 0.988, 0.989, 0.990],
-                                               tau_syn_I=lambda i: 0.5+0.1*i))
+                                               tau_syn_I=lambda i: 0.5 + 0.1 * i))
         p2 = sim.Population(3, sim.EIF_cond_exp_isfa_ista(tau_m=12.3,
                                                           tau_syn_E=[0.991, 0.992, 0.993],
-                                                          tau_syn_I=lambda i: 0.5+0.1*(i + 4)))
+                                                          tau_syn_I=lambda i: 0.5 + 0.1 * (i + 4)))
         a = p1 + p2
         tau_syn_E, tau_m, tau_syn_I = a.get(('tau_syn_E', 'tau_m', 'tau_syn_I'), gather=True)
         self.assertIsInstance(tau_m, float)
@@ -530,10 +532,10 @@ class AssemblyTest(unittest.TestCase):
         sim.simulator.state.mpi_rank = 1
         p1 = sim.Population(4, sim.IF_cond_exp(tau_m=12.3,
                                                tau_syn_E=[0.987, 0.988, 0.989, 0.990],
-                                               i_offset=lambda i: -0.2*i))
+                                               i_offset=lambda i: -0.2 * i))
         p2 = sim.Population(3, sim.IF_curr_exp(tau_m=12.3,
                                                tau_syn_E=[0.991, 0.992, 0.993],
-                                               i_offset=lambda i: -0.2*(i + 4)))
+                                               i_offset=lambda i: -0.2 * (i + 4)))
         a = p1 + p2
         tau_syn_E, tau_m, i_offset = a.get(('tau_syn_E', 'tau_m', 'i_offset'), gather=False)
         self.assertIsInstance(tau_m, float)
@@ -556,7 +558,30 @@ class AssemblyTest(unittest.TestCase):
         self.assertEqual(spike_times.size, 5)
         assert_array_equal(spike_times[3], Sequence([4, 5, 6, 7]))
 
+    @register()
+    def test_inject(self, sim=sim):
+        p1 = sim.Population(3, sim.IF_curr_alpha())
+        p2 = sim.Population(5, sim.IF_cond_exp())
+        a = p1 + p2
+        cs = Mock()
+        a.inject(cs)
+        meth, args, kwargs = cs.method_calls[0]
+        self.assertEqual(meth, "inject_into")
+        self.assertEqual(args, (p1,))
+        meth, args, kwargs = cs.method_calls[1]
+        self.assertEqual(meth, "inject_into")
+        self.assertEqual(args, (p2,))
 
+    @register(exclude=['nest', 'neuron', 'brian', 'hardware.brainscales', 'spiNNaker'])
+    def test_mean_spike_count(self, sim=sim):
+        p1 = sim.Population(14, sim.EIF_cond_exp_isfa_ista())
+        p2 = sim.Population(37, sim.IF_cond_alpha())
+        a = p1 + p2
+        p1.record('spikes')
+        p2.record('spikes')
+        #a.record('spikes')
+        sim.run(100.0)
+        self.assertEqual(a.mean_spike_count(), 2.0)  # mock backend always produces two spikes per population
 
 
 if __name__ == '__main__':

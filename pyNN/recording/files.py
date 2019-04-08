@@ -9,13 +9,14 @@ Classes:
     NumpyBinaryFile
     HDF5ArrayFile - requires PyTables
 
-:copyright: Copyright 2006-2015 by the PyNN team, see AUTHORS.
+:copyright: Copyright 2006-2016 by the PyNN team, see AUTHORS.
 :license: CeCILL, see LICENSE for details.
 
 """
 
-
-import numpy, os, shutil
+import numpy
+import os
+import shutil
 try:
     import cPickle as pickle
 except ImportError:
@@ -31,6 +32,7 @@ from pyNN.core import iteritems
 
 DEFAULT_BUFFER_SIZE = 10000
 
+
 def _savetxt(filename, data, format, delimiter):
     """
     Due to the lack of savetxt in older versions of numpy
@@ -38,7 +40,7 @@ def _savetxt(filename, data, format, delimiter):
     """
     f = open(filename, 'w')
     for row in data:
-        f.write(delimiter.join([format%val for val in row]) + '\n')
+        f.write(delimiter.join([format % val for val in row]) + '\n')
     f.close()
 
 
@@ -93,8 +95,8 @@ class BaseFile(object):
             try:  # wrapping in try...except block for MPI
                 os.makedirs(dir)
             except IOError:
-                pass
-        try: ## Need this because in parallel, file names are changed
+                pass  # we assume that the directory was already created by another MPI node
+        try:  # Need this because in parallel, file names are changed
             self.fileobj = open(self.name, mode, DEFAULT_BUFFER_SIZE)
         except Exception as err:
             self.open_error = err
@@ -108,7 +110,7 @@ class BaseFile(object):
 
     def rename(self, filename):
         self.close()
-        try: ## Need this because in parallel, only one node will delete the file with NFS
+        try:  # Need this because in parallel, only one node will delete the file with NFS
             os.remove(self.name)
         except Exception:
             pass
@@ -173,10 +175,11 @@ class StandardTextFile(BaseFile):
                     break
                 name, value = line[1:].split("=")
                 name = name.strip()
-                try:
-                    D[name] = eval(value)
-                except Exception:
-                    D[name] = value.strip()
+                value = eval(value)
+                if type(value) in [list, tuple]:
+                    D[name] = value
+                else:
+                    raise TypeError("Column headers must be specified using a list or tuple.")
             else:
                 break
         self.fileobj.seek(0)
@@ -231,7 +234,7 @@ class NumpyBinaryFile(BaseFile):
         __doc__ = BaseFile.get_metadata.__doc__
         self._check_open()
         D = {}
-        for name,value in numpy.load(self.fileobj)['metadata']:
+        for name, value in numpy.load(self.fileobj)['metadata']:
             try:
                 D[name] = eval(value)
             except Exception:
@@ -253,14 +256,22 @@ if have_hdf5:
             """
             self.name = filename
             self.mode = mode
-            self.fileobj = tables.openFile(filename, mode=mode, title=title)
+            try:
+                self.fileobj = tables.open_file(filename, mode=mode, title=title)
+                self._new_pytables = True
+            except AttributeError:
+                self.fileobj = tables.openFile(filename, mode=mode, title=title)
+                self._new_pytables = False
 
         # may not work with old versions of PyTables < 1.3, since they only support numarray, not numpy
         def write(self, data, metadata):
             __doc__ = BaseFile.write.__doc__
             if len(data) > 0:
                 try:
-                    node = self.fileobj.createArray(self.fileobj.root, "data", data)
+                    if self._new_pytables:
+                        node = self.fileobj.create_array(self.fileobj.root, "data", data)
+                    else:
+                        node = self.fileobj.createArray(self.fileobj.root, "data", data)
                 except tables.HDF5ExtError as e:
                     raise tables.HDF5ExtError("%s. data.shape=%s, metadata=%s" % (e, data.shape, metadata))
                 for name, value in metadata.items():

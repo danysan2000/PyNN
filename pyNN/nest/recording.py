@@ -1,21 +1,20 @@
 """
 
-:copyright: Copyright 2006-2011 by the PyNN team, see AUTHORS.
+:copyright: Copyright 2006-2016 by the PyNN team, see AUTHORS.
 :license: CeCILL, see LICENSE for details.
 """
 
-import tempfile
-import os
 import numpy
 import logging
 import nest
-from pyNN import recording, errors
+from pyNN import recording
 from pyNN.nest import simulator
 
+# todo: this information should come from the cell type classes
 VARIABLE_MAP = {'v': 'V_m', 'gsyn_exc': 'g_ex', 'gsyn_inh': 'g_in', 'u': 'U_m',
-                'w': 'w'}
-REVERSE_VARIABLE_MAP = dict((v,k) for k,v in VARIABLE_MAP.items())
-SCALE_FACTORS = {'v': 1, 'gsyn_exc': 0.001, 'gsyn_inh': 0.001}
+                'w': 'w', 'i_eta': 'I_stc', 'v_t': 'E_sfa'}
+REVERSE_VARIABLE_MAP = dict((v, k) for k, v in VARIABLE_MAP.items())
+SCALE_FACTORS = {'v': 1, 'gsyn_exc': 0.001, 'gsyn_inh': 0.001, 'w': 0.001, 'i_eta': 0.001, 'v_t': 1}
 
 logger = logging.getLogger("PyNN")
 
@@ -54,31 +53,41 @@ class RecordingDevice(object):
         """
         scale_factor = SCALE_FACTORS.get(variable, 1)
         nest_variable = VARIABLE_MAP.get(variable, variable)
-        events = nest.GetStatus(self.device,'events')[0]
+        events = nest.GetStatus(self.device, 'events')[0]
         ids = events['senders']
-        values = events[nest_variable] * scale_factor # I'm hoping numpy optimises for the case where scale_factor = 1, otherwise should avoid this multiplication in that case
+        values = events[nest_variable] * scale_factor  # I'm hoping numpy optimises for the case where scale_factor = 1, otherwise should avoid this multiplication in that case
         data = {}
-        for id in desired_ids:
-            data[id] = values[ids==id]
-            if variable != 'times':
+        recorded_ids = set(ids)
+        
+        for id in recorded_ids:
+            data[id]=[]
+
+        for id,v in zip(ids,values):
+            data[id].append(v)
+
+        desired_and_existing_ids = numpy.intersect1d(numpy.array(list(recorded_ids)),numpy.array(desired_ids))
+        data = {k : data[k] for k in desired_and_existing_ids}
+
+        if variable != 'times':
+            for id in desired_ids:
                 # NEST does not record values at the zeroth time step, so we
                 # add them here.
                 if variable not in self._initial_values:
                     self._initial_values[variable] = {}
-                initial_value = self._initial_values[variable].get(id,
+                initial_value = self._initial_values[variable].get(int(id),
                                                                    id.get_initial_value(variable))
-                data[id] = numpy.concatenate((numpy.hstack([initial_value]), data[id]))
+                data[int(id)] = [initial_value] + data.get(int(id),[])
                 # if `get_data()` is called in the middle of a simulation, the
                 # value at the last time point will become the initial value for
                 # the next time `get_data()` is called
                 if clear:
-                    self._initial_values[variable][id] = data[id][-1]
+                    self._initial_values[variable][int(id)] = data[int(id)][-1]
+
         return data
 
 
 class SpikeDetector(RecordingDevice):
     """A wrapper around the NEST spike_detector device"""
-    _nest_connect = lambda device, ids: nest.ConvergentConnect()
 
     def __init__(self, to_memory=True):
         self.device = nest.Create('spike_detector')
@@ -90,7 +99,11 @@ class SpikeDetector(RecordingDevice):
 
     def connect_to_cells(self):
         assert not self._connected
-        nest.Connect(list(self._all_ids), list(self.device), {'rule':'all_to_all'}, {'model':'static_synapse'})
+        nest.Connect(list(self._all_ids),
+                     list(self.device),
+                     {'rule': 'all_to_all'},
+                     {'model': 'static_synapse',
+                      'delay': simulator.state.min_delay})
         self._connected = True
 
     def get_spiketimes(self, desired_ids):
@@ -113,7 +126,6 @@ class SpikeDetector(RecordingDevice):
 
 class Multimeter(RecordingDevice):
     """A wrapper around the NEST multimeter device"""
-    _nest_connect = nest.ConvergentConnect
 
     def __init__(self, to_memory=True):
         self.device = nest.Create('multimeter')
@@ -125,7 +137,11 @@ class Multimeter(RecordingDevice):
 
     def connect_to_cells(self):
         assert not self._connected
-        nest.Connect(list(self.device), list(self._all_ids), {'rule':'all_to_all'}, {'model':'static_synapse'})
+        nest.Connect(list(self.device),
+                     list(self._all_ids),
+                     {'rule': 'all_to_all'},
+                     {'model': 'static_synapse',
+                      'delay': simulator.state.min_delay})
         self._connected = True
 
     @property
@@ -361,7 +377,8 @@ class Recorder(recording.Recorder):
     _simulator = simulator
     scale_factors = {'spikes': 1,
                      'v': 1,
-                     'gsyn': 0.001} # units conversion
+                     'w': 0.001,
+                     'gsyn': 0.001}  # units conversion
 
     def __init__(self, population, file=None):
         __doc__ = recording.Recorder.__doc__
@@ -416,14 +433,14 @@ class Recorder(recording.Recorder):
         # Maybe we can reset them, rather than create new ones?
         self._multimeter = Multimeter()
         self._spike_detector = SpikeDetector()
-
-    def _get_spiketimes(self, id):
-        return self._spike_detector.get_spiketimes([id])[id] # hugely inefficient - to be optimized later
-
+    
+    def _get_spiketimes(self, ids):
+        return self._spike_detector.get_spiketimes(ids)  # hugely inefficient - to be optimized later
+    
     def _get_all_signals(self, variable, ids, clear=False):
         data = self._multimeter.get_data(variable, ids, clear=clear)
         if len(ids) > 0:
-            return numpy.vstack([data[i] for i in ids]).T
+            return numpy.array([data[i] for i in ids]).T #JACOMMENT: this is very expensive but not sure how to get rid of it 
         else:
             return numpy.array([])
 
@@ -457,7 +474,7 @@ class Recorder(recording.Recorder):
         nest.SetStatus(self._spike_detector.device, 'n_events', 0)
         nest.SetStatus(self._multimeter.device, 'n_events', 0)
 
-    def store_to_cache(self, annotations={}):
+    def store_to_cache(self, annotations=None):
         # we over-ride the implementation from the parent class so as to
         # do some reinitialisation.
         recording.Recorder.store_to_cache(self, annotations)

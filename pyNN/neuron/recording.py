@@ -1,17 +1,15 @@
 """
 
-:copyright: Copyright 2006-2015 by the PyNN team, see AUTHORS.
+:copyright: Copyright 2006-2016 by the PyNN team, see AUTHORS.
 :license: CeCILL, see LICENSE for details.
 """
 
 import numpy
-from datetime import datetime
 from pyNN import recording
 from pyNN.neuron import simulator
 import re
 from neuron import h
-import neo
-from copy import copy
+
 
 recordable_pattern = re.compile(r'((?P<section>\w+)(\((?P<location>[-+]?[0-9]*\.?[0-9]+)\))?\.)?(?P<var>\w+)')
 
@@ -44,13 +42,19 @@ class Recorder(recording.Recorder):
             source, var_name = self._resolve_variable(cell, variable)
             hoc_var = getattr(source, "_ref_%s" % var_name)
         cell.traces[variable] = vec = h.Vector()
-        vec.record(hoc_var, self.sampling_interval)
+        if self.sampling_interval == self._simulator.state.dt:
+            vec.record(hoc_var)
+        else:
+            vec.record(hoc_var, self.sampling_interval)
         if not cell.recording_time:
             cell.record_times = h.Vector()
-            cell.record_times.record(h._ref_t, self.sampling_interval)
+            if self.sampling_interval == self._simulator.state.dt:
+                cell.record_times.record(h._ref_t)
+            else:
+                cell.record_times.record(h._ref_t, self.sampling_interval)
             cell.recording_time += 1
 
-    #could be staticmethod
+    # could be staticmethod
     def _resolve_variable(self, cell, variable_path):
         match = recordable_pattern.match(variable_path)
         if match:
@@ -90,14 +94,21 @@ class Recorder(recording.Recorder):
                 id._cell.clear_past_spikes()
 
     def _get_spiketimes(self, id):
-        spikes = numpy.array(id._cell.spike_times)
-        return spikes[spikes <= simulator.state.t + 1e-9]
+        if hasattr(id, "__len__"):
+            all_spiketimes = {}
+            for cell_id in id:
+                spikes = numpy.array(cell_id._cell.spike_times)
+                all_spiketimes[cell_id] = spikes[spikes <= simulator.state.t + 1e-9]
+            return all_spiketimes
+        else:
+            spikes = numpy.array(id._cell.spike_times)
+            return spikes[spikes <= simulator.state.t + 1e-9]
 
     def _get_all_signals(self, variable, ids, clear=False):
         # assuming not using cvode, otherwise need to get times as well and use IrregularlySampledAnalogSignal
         if len(ids) > 0:
             signals = numpy.vstack((id._cell.traces[variable] for id in ids)).T
-            expected_length = int(simulator.state.tstop/self.sampling_interval) + 1
+            expected_length = numpy.rint(simulator.state.tstop / self.sampling_interval) + 1
             if signals.shape[0] != expected_length:  # generally due to floating point/rounding issues
                 signals = numpy.vstack((signals, signals[-1, :]))
         else:

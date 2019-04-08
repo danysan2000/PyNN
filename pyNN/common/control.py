@@ -8,7 +8,7 @@ This module contains:
     is intended to be reused)
   * function factories for generating backend-specific API functions.
 
-:copyright: Copyright 2006-2015 by the PyNN team, see AUTHORS.
+:copyright: Copyright 2006-2016 by the PyNN team, see AUTHORS.
 :license: CeCILL, see LICENSE for details.
 """
 
@@ -16,9 +16,7 @@ DEFAULT_MAX_DELAY = 10.0
 DEFAULT_TIMESTEP = 0.1
 DEFAULT_MIN_DELAY = 'auto'
 
-##if not 'simulator' in locals():
-##    simulator = None  # should be set by simulator-specific modules
-assert 'simulator' not in locals() ##
+assert 'simulator' not in locals()
 
 
 class BaseState(object):
@@ -28,12 +26,12 @@ class BaseState(object):
         """Initialize the simulator."""
         self.running = False
         self.t_start = 0
-        self.write_on_end = [] # a list of (population, variable, filename) combinations that should be written to file on end()
+        self.write_on_end = []  # a list of (population, variable, filename) combinations that should be written to file on end()
         self.recorders = set([])
 
 
 def setup(timestep=DEFAULT_TIMESTEP, min_delay=DEFAULT_MIN_DELAY,
-          max_delay=DEFAULT_MAX_DELAY, **extra_params):
+           **extra_params):
     """
     Initialises/reinitialises the simulator. Any existing network structure is
     destroyed.
@@ -43,6 +41,7 @@ def setup(timestep=DEFAULT_TIMESTEP, min_delay=DEFAULT_MIN_DELAY,
     `extra_params` contains any keyword arguments that are required by a given
     simulator but not by others.
     """
+    max_delay = extra_params.get('max_delay', DEFAULT_MAX_DELAY)
     invalid_extra_params = ('mindelay', 'maxdelay', 'dt', 'time_step')
     for param in invalid_extra_params:
         if param in extra_params:
@@ -62,14 +61,17 @@ def end(compatible_output=True):
 def build_run(simulator):
     def run_until(time_point, callbacks=None):
         """
-        Run the simulation until `time_point` (in ms).
+        Advance the simulation until `time_point` (in ms).
         
         `callbacks` is an optional list of callables, each of which should
         accept the current time as an argument, and return the next time it
         wishes to be called.
+
+        ``run_until()`` and ``run()`` may be combined freely. See the
+        documentation of the ``run()`` function for further information.
         """
         now = simulator.state.t
-        if time_point - now < -simulator.state.dt/2.0:  # allow for floating point error
+        if time_point - now < -simulator.state.dt / 2.0:  # allow for floating point error
             raise ValueError("Time %g is in the past (current time %g)" % (time_point, now))
         if callbacks:
             callback_events = [(callback(simulator.state.t), callback)
@@ -90,13 +92,21 @@ def build_run(simulator):
         else:
             simulator.state.run_until(time_point)
         return simulator.state.t
+
     def run(simtime, callbacks=None):
         """
-        Run the simulation for `simtime` ms.
+        Advance the simulation by `simtime` ms.
         
         `callbacks` is an optional list of callables, each of which should
         accept the current time as an argument, and return the next time it
         wishes to be called.
+
+        ``run()`` may be called multiple times during a simulation.
+        In between calls to ``run()`` it is possible to retrieve data
+        and modify neuron/synapse parameters. Some backends allow modification of
+        the network structure. ``run(x + y)`` is equivalent to ``run(x)``
+        followed by ``run(y)``. If you wish to reset the simulation state to
+        the initial conditions (time ``t = 0``), use the ``reset()`` function.
         """
         return run_until(simulator.state.t + simtime, callbacks)
     return run, run_until
@@ -106,8 +116,9 @@ def build_reset(simulator):
     def reset(annotations={}):
         """
         Reset the time to zero, neuron membrane potentials and synaptic weights to
-        their initial values, and delete any recorded data. The network structure
-        is not changed, nor is the specification of which neurons to record from.
+        their initial values, and begin a new Segment for recorded data. 
+        The network structure is not changed, nor are neuron/synapse parameters,
+        nor the specification of which neurons to record from.
         """
         for recorder in simulator.state.recorders:
             recorder.store_to_cache(annotations)

@@ -2,11 +2,12 @@
 """
 NEST v2 implementation of the PyNN API.
 
-:copyright: Copyright 2006-2015 by the PyNN team, see AUTHORS.
+:copyright: Copyright 2006-2016 by the PyNN team, see AUTHORS.
 :license: CeCILL, see LICENSE for details.
 
 """
 
+import warnings
 import numpy
 try:
     import tables  # due to freeze when importing nest before tables
@@ -30,6 +31,7 @@ import shutil
 import logging
 
 from pyNN.nest.cells import NativeCellType, native_cell_type
+from pyNN.nest.electrodes import NativeElectrodeType, native_electrode_type
 from pyNN.nest.synapses import NativeSynapseType, native_synapse_type
 from pyNN.nest.standardmodels.cells import *
 from pyNN.nest.connectors import *
@@ -47,9 +49,16 @@ logger = logging.getLogger("PyNN")
 if logger.level == logging.NOTSET:
     logger.setLevel(logging.ERROR)
 
+try:
+    nest.Install('pynn_extensions')
+except nest.NESTError as err:
+    warnings.warn("Unable to install NEST extensions. Certain models may not be available.\nFurther details: {}".format(err))
+
+
 # ==============================================================================
 #   Utility functions
 # ==============================================================================
+
 
 def list_standard_models():
     """Return a list of all the StandardCellType classes available for this simulator."""
@@ -61,6 +70,7 @@ def list_standard_models():
             print("Warning: %s is defined, but produces the following error: %s" % (cell_class.__name__, e))
             standard_cell_types.remove(cell_class)
     return [obj.__name__ for obj in standard_cell_types]
+
 
 def _discrepancy_due_to_rounding(parameters, output_values):
     """NEST rounds delays to the time step."""
@@ -81,8 +91,9 @@ def _discrepancy_due_to_rounding(parameters, output_values):
 #   Functions for simulation set-up and control
 # ==============================================================================
 
+
 def setup(timestep=DEFAULT_TIMESTEP, min_delay=DEFAULT_MIN_DELAY,
-          max_delay=DEFAULT_MAX_DELAY, **extra_params):
+          **extra_params):
     """
     Should be called at the very beginning of a script.
 
@@ -106,10 +117,10 @@ def setup(timestep=DEFAULT_TIMESTEP, min_delay=DEFAULT_MIN_DELAY,
     `rng_seeds_seed`:
         a single seed that will be used to generate random values for `rng_seeds`
     """
-    common.setup(timestep, min_delay, max_delay, **extra_params)
+    max_delay = extra_params.get('max_delay', DEFAULT_MAX_DELAY)
+    common.setup(timestep, min_delay, **extra_params)
     simulator.state.clear()
-    for key in ("verbosity", "spike_precision", "recording_precision",
-                "threads"):
+    for key in ("threads", "verbosity", "spike_precision", "recording_precision"):
         if key in extra_params:
             setattr(simulator.state, key, extra_params[key])
     # set kernel RNG seeds
@@ -124,7 +135,7 @@ def setup(timestep=DEFAULT_TIMESTEP, min_delay=DEFAULT_MIN_DELAY,
         simulator.state.rng_seeds = rng.next(n, 'uniform_int', {'low': 0, 'high': 100000}).tolist()
     # set resolution
     simulator.state.dt = timestep
-    # Set min_delay and max_delay for all synapse models
+    # Set min_delay and max_delay
     simulator.state.set_delays(min_delay, max_delay)
     nest.SetDefaults('spike_generator', {'precise_times': True})
     return rank()

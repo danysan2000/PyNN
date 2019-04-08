@@ -4,16 +4,14 @@ Common implementation of ID, Population, PopulationView and Assembly classes.
 
 These base classes should be sub-classed by the backend-specific classes.
 
-:copyright: Copyright 2006-2015 by the PyNN team, see AUTHORS.
+:copyright: Copyright 2006-2016 by the PyNN team, see AUTHORS.
 :license: CeCILL, see LICENSE for details.
 """
 
 import numpy
-import os
 import logging
 import operator
 from itertools import chain
-import tempfile
 try:
     basestring
     reduce
@@ -56,6 +54,11 @@ class IDMixin(object):
     def __getattr__(self, name):
         if name == "parent":
             raise Exception("parent is not set")
+        elif name == "set":
+            errmsg = "For individual cells, set values using the parameter name directly, " \
+                     "e.g. population[0].tau_m = 20.0, or use 'set' on a population view, " \
+                     "e.g. population[0:1].set(tau_m=20.0)"
+            raise AttributeError(errmsg)
         try:
             val = self.get_parameters()[name]
         except KeyError:
@@ -87,7 +90,7 @@ class IDMixin(object):
         """Return a dict of all cell parameters."""
         if self.local:
             parameter_names = self.celltype.get_parameter_names()
-            return dict((k, v) for k,v in zip(parameter_names, self.as_view().get(parameter_names)))
+            return dict((k, v) for k, v in zip(parameter_names, self.as_view().get(parameter_names)))
         else:
             raise errors.NotLocalError("Cannot obtain parameters for a cell that does not exist on this node.")
 
@@ -140,7 +143,7 @@ class IDMixin(object):
     def as_view(self):
         """Return a PopulationView containing just this cell."""
         index = self.parent.id_to_index(self)
-        return self.parent[index:index+1]
+        return self.parent[index:index + 1]
 
 
 class BasePopulation(object):
@@ -173,7 +176,7 @@ class BasePopulation(object):
     @property
     def local_size(self):
         """Return the number of cells in the population on the local MPI node"""
-        return len(self.local_cells) # would self._mask_local.sum() be faster?
+        return len(self.local_cells)  # would self._mask_local.sum() be faster?
 
     def __iter__(self):
         """Iterator over cell ids on the local node."""
@@ -226,9 +229,13 @@ class BasePopulation(object):
         return gen
 
     def _get_cell_initial_value(self, id, variable):
-        assert isinstance(self.initial_values[variable], LazyArray)
-        index = self.id_to_local_index(id)
-        return self.initial_values[variable][index]
+        if variable in self.initial_values:
+            assert isinstance(self.initial_values[variable], LazyArray)
+            index = self.id_to_local_index(id)
+            return self.initial_values[variable][index]
+        else:
+            logger.warning("Variable '{}' is not in initial values, returning 0.0".format(variable))
+            return 0.0
 
     def _set_cell_initial_value(self, id, variable, value):
         assert isinstance(self.initial_values[variable], LazyArray)
@@ -263,7 +270,7 @@ class BasePopulation(object):
         """
         Get the values of the given parameters for every local cell in the
         population, or, if gather=True, for all cells in the population.
-        
+
         Values will be expressed in the standard PyNN units (i.e. millivolts,
         nanoamps, milliseconds, microsiemens, nanofarads, event per second).
         """
@@ -276,30 +283,32 @@ class BasePopulation(object):
             return_list = True
         if isinstance(self.celltype, standardmodels.StandardCellType):
             if any(name in self.celltype.computed_parameters() for name in parameter_names):
-                native_names = self.celltype.get_native_names() # need all parameters in order to calculate values
+                native_names = self.celltype.get_native_names()  # need all parameters in order to calculate values
             else:
                 native_names = self.celltype.get_native_names(*parameter_names)
             native_parameter_space = self._get_parameters(*native_names)
             parameter_space = self.celltype.reverse_translate(native_parameter_space)
         else:
-            parameter_space = self._get_parameters(*self.celltype.get_parameter_names())
-        parameter_space.evaluate(simplify=simplify) # what if parameter space is homogeneous on some nodes but not on others?
-
+            parameter_space = self._get_parameters(*parameter_names)
+        parameter_space.evaluate(simplify=simplify)  # what if parameter space is homogeneous on some nodes but not on others?
+                                                     # this also causes problems if the population size matches the number of MPI nodes
         parameters = dict(parameter_space.items())
         if gather == True and self._simulator.state.num_processes > 1:
             # seems inefficient to do it in a loop - should do as single operation
             for name in parameter_names:
-                values = parameter_space[name]
-                all_values  = { self._simulator.state.mpi_rank: values.tolist() }
-                all_indices = { self._simulator.state.mpi_rank: self.local_cells.tolist() }
-                all_values  = recording.gather_dict(all_values)
-                all_indices = recording.gather_dict(all_indices)
-                if self._simulator.state.mpi_rank == 0:
-                    values  = reduce(operator.add, all_values.values())
-                    indices = reduce(operator.add, all_indices.values())
-                idx    = numpy.argsort(indices)
-                values = numpy.array(values)[idx]
-            parameters[name] = values
+                values = parameters[name]
+                if isinstance(values, numpy.ndarray):
+                    all_values = {self._simulator.state.mpi_rank: values.tolist()}
+                    local_indices = numpy.arange(self.size)[self._mask_local].tolist()
+                    all_indices = {self._simulator.state.mpi_rank: local_indices}
+                    all_values = recording.gather_dict(all_values)
+                    all_indices = recording.gather_dict(all_indices)
+                    if self._simulator.state.mpi_rank == 0:
+                        values = reduce(operator.add, all_values.values())
+                        indices = reduce(operator.add, all_indices.values())
+                        idx = numpy.argsort(indices)
+                        values = numpy.array(values)[idx]
+                parameters[name] = values
         try:
             values = [parameters[name] for name in parameter_names]
         except KeyError as err:
@@ -334,21 +343,24 @@ class BasePopulation(object):
             p.set(cm=rand_distr, tau_m=lambda i: 10 + i/10.0)
         """
         # TODO: add example using of function of (x,y,z) and Population.position_generator
-        if (isinstance(self.celltype, standardmodels.StandardCellType)
-            and any(name in self.celltype.computed_parameters() for name in parameters)):
-            # need to get existing parameter space of models so we can perform calculations
-            native_names = self.celltype.get_native_names()
-            parameter_space = self.celltype.reverse_translate(self._get_parameters(*native_names))
-            parameter_space.update(**parameters)
-        else:
-            parameter_space = ParameterSpace(parameters,
-                                             self.celltype.get_schema(),
-                                             (self.size,),
-                                             self.celltype.__class__)
-        if isinstance(self.celltype, standardmodels.StandardCellType):
-            parameter_space = self.celltype.translate(parameter_space)
-        assert parameter_space.shape == (self.size,)
-        self._set_parameters(parameter_space)
+        if self.local_size > 0:
+            if (isinstance(self.celltype, standardmodels.StandardCellType)
+                and any(name in self.celltype.computed_parameters() for name in parameters)):
+                # need to get existing parameter space of models so we can perform calculations
+                native_names = self.celltype.get_native_names()
+                parameter_space = self.celltype.reverse_translate(self._get_parameters(*native_names))
+                if self.local_size != self.size:
+                    parameter_space.expand((self.size,), self._mask_local)
+                parameter_space.update(**parameters)
+            else:
+                parameter_space = ParameterSpace(parameters,
+                                                 self.celltype.get_schema(),
+                                                 (self.size,),
+                                                 self.celltype.__class__)
+            if isinstance(self.celltype, standardmodels.StandardCellType):
+                parameter_space = self.celltype.translate(parameter_space)
+            assert parameter_space.shape == (self.size,), "{} != {}".format(parameter_space.shape, self.size)
+            self._set_parameters(parameter_space)
 
     @deprecated("set(parametername=value_array)")
     def tset(self, parametername, value_array):
@@ -397,11 +409,22 @@ class BasePopulation(object):
             self.initial_values[variable] = initial_value
 
     def find_units(self, variable):
+        """
+        Returns units of the specified variable or parameter, as a string.
+        Works for all the recordable variables and neuron parameters of all standard models.
+        """
         return self.celltype.units[variable]
+
+    def annotate(self, **annotations):
+        self.annotations.update(annotations)
 
     def can_record(self, variable):
         """Determine whether `variable` can be recorded from this population."""
         return self.celltype.can_record(variable)
+
+    @property
+    def injectable(self):
+        return self.celltype.injectable
 
     def record(self, variables, to_file=None, sampling_interval=None):
         """
@@ -412,15 +435,15 @@ class BasePopulation(object):
         names. For a given celltype class, `celltype.recordable` contains a list of
         variables that can be recorded for that celltype.
 
-        If specified, `to_file` should be a Neo IO instance and `write_data()`
+        If specified, `to_file` should be either a filename or a Neo IO instance and `write_data()`
         will be automatically called when `end()` is called.
-        
+
         `sampling_interval` should be a value in milliseconds, and an integer
         multiple of the simulation timestep.
         """
-        if variables is None: # reset the list of things to record
-                              # note that if record(None) is called on a view of a population
-                              # recording will be reset for the entire population, not just the view
+        if variables is None:  # reset the list of things to record
+                               # note that if record(None) is called on a view of a population
+                               # recording will be reset for the entire population, not just the view
             self.recorder.reset()
         else:
             logger.debug("%s.record('%s')", self.label, variables)
@@ -430,6 +453,7 @@ class BasePopulation(object):
                 self.recorder.record(variables, self._record_filter, sampling_interval)
         if isinstance(to_file, basestring):
             self.recorder.file = to_file
+            self._simulator.state.write_on_end.append((self, variables, self.recorder.file))
 
     @deprecated("record('v')")
     def record_v(self, to_file=True):
@@ -463,7 +487,7 @@ class BasePopulation(object):
         simulated on that node.
 
         If `clear` is True, recorded data will be deleted from the `Population`.
-        
+
         `annotations` should be a dict containing simple data types such as
         numbers and strings. The contents will be written into the output data
         file as metadata.
@@ -517,7 +541,7 @@ class BasePopulation(object):
     def get_spike_counts(self, gather=True):
         """
         Returns a dict containing the number of spikes for each neuron.
-        
+
         The dict keys are neuron IDs, not indices.
         """
         # arguably, we should use indices
@@ -535,7 +559,7 @@ class BasePopulation(object):
         total_spikes = sum(spike_counts.values())
         if self._simulator.state.mpi_rank == 0 or not gather:  # should maybe use allgather, and get the numbers on all nodes
             if len(spike_counts) > 0:
-                return float(total_spikes)/len(spike_counts)
+                return float(total_spikes) / len(spike_counts)
             else:
                 return 0
         else:
@@ -552,18 +576,16 @@ class BasePopulation(object):
     # name should be consistent with saving/writing data, i.e. save_data() and save_positions() or write_data() and write_positions()
     def save_positions(self, file):
         """
-        Save positions to file. The output format is ``id x y z``
+        Save positions to file. The output format is ``index x y z``
         """
-        # first column should probably be indices, not ids. This would make it
-        # simulator independent.
         if isinstance(file, basestring):
             file = recording.files.StandardTextFile(file, mode='w')
-        cells  = self.all_cells
+        cells = self.all_cells
         result = numpy.empty((len(cells), 4))
-        result[:,0]   = cells
-        result[:,1:4] = self.positions.T
+        result[:, 0] = numpy.array([self.id_to_index(id) for id in cells])
+        result[:, 1:4] = self.positions.T
         if self._simulator.state.mpi_rank == 0:
-            file.write(result, {'population' : self.label})
+            file.write(result, {'population': self.label})
             file.close()
 
 
@@ -604,7 +626,12 @@ class Population(BasePopulation):
         """
         Create a population of neurons all of the same type.
         """
-        if not isinstance(size, int):  # also allow a single integer, for a 1D population
+        if not hasattr(self, "_simulator"):
+            errmsg = "`common.Population` should not be instantiated directly. " \
+                     "You should import Population from a PyNN backend module, " \
+                     "e.g. pyNN.nest or pyNN.neuron"
+            raise Exception(errmsg)
+        if not isinstance(size, (int, numpy.integer)):  # also allow a single integer, for a 1D population
             assert isinstance(size, tuple), "`size` must be an integer or a tuple of ints. You have supplied a %s" % type(size)
             # check the things inside are ints
             for e in size:
@@ -615,13 +642,13 @@ class Population(BasePopulation):
                 structure = space.Line()
             elif len(size) == 2:
                 nx, ny = size
-                structure = space.Grid2D(nx/float(ny))
+                structure = space.Grid2D(nx / float(ny))
             elif len(size) == 3:
                 nx, ny, nz = size
-                structure = space.Grid3D(nx/float(ny), nx/float(nz))
+                structure = space.Grid3D(nx / float(ny), nx / float(nz))
             else:
                 raise Exception("A maximum of 3 dimensions is allowed. What do you think this is, string theory?")
-            size = int(reduce(operator.mul, size)) # NEST doesn't like numpy.int, so to be safe we cast to Python int
+            size = int(reduce(operator.mul, size))  # NEST doesn't like numpy.int, so to be safe we cast to Python int
         self.size = size
         self.label = label or 'population%d' % Population._nPop
         self._structure = structure or space.Line()
@@ -724,9 +751,6 @@ class Population(BasePopulation):
                          giving the x,y,z coordinates of all the neurons (soma, in the
                          case of non-point models).""")
 
-    def annotate(self, **annotations):
-        self.annotations.update(annotations)
-
     def describe(self, template='population_default.txt', engine='default'):
         """
         Returns a human-readable description of the population.
@@ -751,7 +775,7 @@ class Population(BasePopulation):
             first_id = self.local_cells[0]
             context.update({
                 "local_first_id": first_id,
-                "cell_parameters": {} #first_id.get_parameters(),
+                "cell_parameters": {}  # first_id.get_parameters(),
             })
         if self.structure:
             context["structure"] = self.structure.describe(template=None)
@@ -787,10 +811,15 @@ class PopulationView(BasePopulation):
         Create a view of a subset of neurons within a parent Population or
         PopulationView.
         """
+        if not hasattr(self, "_simulator"):
+            errmsg = "`common.PopulationView` should not be instantiated directly. " \
+                     "You should import PopulationView from a PyNN backend module, " \
+                     "e.g. pyNN.nest or pyNN.neuron"
+            raise Exception(errmsg)
         self.parent = parent
-        self.mask = selector # later we can have fancier selectors, for now we just have numpy masks
+        self.mask = selector  # later we can have fancier selectors, for now we just have numpy masks
         # maybe just redefine __getattr__ instead of the following...
-        self.celltype     = self.parent.celltype
+        self.celltype = self.parent.celltype
         # If the mask is a slice, IDs will be consecutives without duplication.
         # If not, then we need to remove duplicated IDs
         if not isinstance(self.mask, slice):
@@ -803,17 +832,18 @@ class PopulationView(BasePopulation):
             if len(numpy.unique(self.mask)) != len(self.mask):
                 logging.warning("PopulationView can contain only once each ID, duplicated IDs are remove")
                 self.mask = numpy.unique(self.mask)
-        self.all_cells    = self.parent.all_cells[self.mask]  # do we need to ensure this is ordered?
+        self.all_cells = self.parent.all_cells[self.mask]  # do we need to ensure this is ordered?
         idx = numpy.argsort(self.all_cells)
-        self._is_sorted =  numpy.all(idx == numpy.arange(len(self.all_cells)))
-        self.size         = len(self.all_cells)
-        self.label  = label or "view of '%s' with size %s" % (parent.label, self.size)
-        self._mask_local  = self.parent._mask_local[self.mask]
-        self.local_cells  = self.all_cells[self._mask_local]
-        self.first_id     = numpy.min(self.all_cells) # only works if we assume all_cells is sorted, otherwise could use min()
-        self.last_id      = numpy.max(self.all_cells)
-        self.recorder    = self.parent.recorder
-        self._record_filter= self.all_cells
+        self._is_sorted = numpy.all(idx == numpy.arange(len(self.all_cells)))
+        self.size = len(self.all_cells)
+        self.label = label or "view of '%s' with size %s" % (parent.label, self.size)
+        self._mask_local = self.parent._mask_local[self.mask]
+        self.local_cells = self.all_cells[self._mask_local]
+        self.first_id = numpy.min(self.all_cells)  # only works if we assume all_cells is sorted, otherwise could use min()
+        self.last_id = numpy.max(self.all_cells)
+        self.annotations = {}
+        self.recorder = self.parent.recorder
+        self._record_filter = self.all_cells
 
     def __repr__(self):
         return "PopulationView(parent=%r, selector=%r, label=%r)" % (self.parent, self.mask, self.label)
@@ -845,12 +875,12 @@ class PopulationView(BasePopulation):
         if not numpy.iterable(id):
             if self._is_sorted:
                 if id not in self.all_cells:
-                    raise IndexError("ID %s not present in the View" %id)
+                    raise IndexError("ID %s not present in the View" % id)
                 return numpy.searchsorted(self.all_cells, id)
             else:
                 result = numpy.where(self.all_cells == id)[0]
             if len(result) == 0:
-                raise IndexError("ID %s not present in the View" %id)
+                raise IndexError("ID %s not present in the View" % id)
             else:
                 return result
         else:
@@ -861,9 +891,9 @@ class PopulationView(BasePopulation):
                 for item in id:
                     data = numpy.where(self.all_cells == item)[0]
                     if len(data) == 0:
-                        raise IndexError("ID %s not present in the View" %item)
+                        raise IndexError("ID %s not present in the View" % item)
                     elif len(data) > 1:
-                        raise Exception("ID %s is duplicated in the View" %item)
+                        raise Exception("ID %s is duplicated in the View" % item)
                     else:
                         result = numpy.append(result, data)
                 return result
@@ -907,8 +937,8 @@ class PopulationView(BasePopulation):
                    "parent": self.parent.label,
                    "mask": self.mask,
                    "size": self.size}
+        context.update(self.annotations)
         return descriptions.render(engine, template, context)
-
 
 
 class Assembly(object):
@@ -928,6 +958,11 @@ class Assembly(object):
         """
         Create an Assembly of Populations and/or PopulationViews.
         """
+        if not hasattr(self, "_simulator"):
+            errmsg = "`common.Assembly` should not be instantiated directly. " \
+                     "You should import Assembly from a PyNN backend module, " \
+                     "e.g. pyNN.nest or pyNN.neuron"
+            raise Exception(errmsg)
         if kwargs:
             assert list(kwargs.keys()) == ['label']
         self.populations = []
@@ -935,6 +970,7 @@ class Assembly(object):
             self._insert(p)
         self.label = kwargs.get('label', 'assembly%d' % Assembly._count)
         assert isinstance(self.label, basestring), "label must be a string or unicode"
+        self.annotations = {}
         Assembly._count += 1
 
     def __repr__(self):
@@ -948,9 +984,9 @@ class Assembly(object):
                 double = False
                 for p in self.populations:
                     data = numpy.concatenate((p.all_cells, element.all_cells))
-                    if len(numpy.unique(data))!= len(p.all_cells) + len(element.all_cells):
+                    if len(numpy.unique(data)) != len(p.all_cells) + len(element.all_cells):
                         logging.warning('Adding a PopulationView to an Assembly containing elements already present is not posible')
-                        double = True #Should we automatically remove duplicated IDs ?
+                        double = True  # Should we automatically remove duplicated IDs ?
                         break
                 if not double:
                     self.populations.append(element)
@@ -1011,6 +1047,10 @@ class Assembly(object):
         return rts
 
     def find_units(self, variable):
+        """
+        Returns units of the specified variable or parameter, as a string.
+        Works for all the recordable variables and neuron parameters of all standard models.
+        """
         units = set(p.find_units(variable) for p in self.populations)
         if len(units) > 1:
             raise ValueError("Inconsistent units")
@@ -1037,7 +1077,7 @@ class Assembly(object):
         (order in the Assembly)::
 
             >>> assert p.id_to_index(p[5]) == 5
-            >>> assert p.id_to_index(p.index([1,2,3])) == [1,2,3]
+            >>> assert p.id_to_index(p.index([1, 2, 3])) == [1, 2, 3]
         """
         all_cells = self.all_cells
         if not numpy.iterable(id):
@@ -1046,7 +1086,7 @@ class Assembly(object):
             else:
                 result = numpy.where(all_cells == id)[0]
             if len(result) == 0:
-                raise IndexError("ID %s not present in the View" %id)
+                raise IndexError("ID %s not present in the View" % id)
             else:
                 return result
         else:
@@ -1057,9 +1097,9 @@ class Assembly(object):
                 for item in id:
                     data = numpy.where(all_cells == item)[0]
                     if len(data) == 0:
-                        raise IndexError("ID %s not present in the Assembly" %item)
+                        raise IndexError("ID %s not present in the Assembly" % item)
                     elif len(data) > 1:
-                        raise Exception("ID %s is duplicated in the Assembly" %item)
+                        raise Exception("ID %s is duplicated in the Assembly" % item)
                     else:
                         result = numpy.append(result, data)
                 return result
@@ -1100,16 +1140,16 @@ class Assembly(object):
             boundaries.append(count)
         boundaries = numpy.array(boundaries, dtype=numpy.int)
 
-        if isinstance(index, (int, numpy.integer)): # return an ID
+        if isinstance(index, (int, numpy.integer)):  # return an ID
             pindex = boundaries[1:].searchsorted(index, side='right')
-            return self.populations[pindex][index-boundaries[pindex]]
+            return self.populations[pindex][index - boundaries[pindex]]
         elif isinstance(index, (slice, tuple, list, numpy.ndarray)):
-            if isinstance(index, slice):
+            if isinstance(index, slice) or (hasattr(index, "dtype") and index.dtype == bool):
                 indices = numpy.arange(self.size)[index]
             else:
                 indices = numpy.array(index)
             pindices = boundaries[1:].searchsorted(indices, side='right')
-            views = [self.populations[i][indices[pindices==i] - boundaries[i]] for i in numpy.unique(pindices)]
+            views = [self.populations[i][indices[pindices == i] - boundaries[i]] for i in numpy.unique(pindices)]
             return self.__class__(*views)
         else:
             raise TypeError("indices must be integers, slices, lists, arrays, not %s" % type(index).__name__)
@@ -1192,7 +1232,6 @@ class Assembly(object):
             assert len(parameter_names) == 1
             return values[0]
 
-
     def set(self, **parameters):
         """
         Set one or more parameters for every cell in the Assembly.
@@ -1221,7 +1260,7 @@ class Assembly(object):
         names. For a given celltype class, `celltype.recordable` contains a list of
         variables that can be recorded for that celltype.
 
-        If specified, `to_file` should be a Neo IO instance and `write_data()`
+        If specified, `to_file` should be either a filename or a Neo IO instance and `write_data()`
         will be automatically called when `end()` is called.
         """
         for p in self.populations:
@@ -1251,21 +1290,20 @@ class Assembly(object):
         """
         Save positions to file. The output format is id x y z
         """
-        # this should be rewritten to use self.positions and recording.files
         if isinstance(file, basestring):
             file = files.StandardTextFile(file, mode='w')
-        cells  = self.all_cells
+        cells = self.all_cells
         result = numpy.empty((len(cells), 4))
-        result[:,0]   = cells
-        result[:,1:4] = self.positions.T
+        result[:, 0] = numpy.array([self.id_to_index(id) for id in cells])
+        result[:, 1:4] = self.positions.T
         if self._simulator.state.mpi_rank == 0:
-            file.write(result, {'assembly' : self.label})
+            file.write(result, {'assembly': self.label})
             file.close()
 
     @property
     def position_generator(self):
         def gen(i):
-            return self.positions[:,i]
+            return self.positions[:, i]
         return gen
 
     def get_data(self, variables='all', gather=True, clear=False, annotations=None):
@@ -1287,19 +1325,18 @@ class Assembly(object):
         name = self.label
         description = self.describe()
         blocks = [p.get_data(variables, gather, clear) for p in self.populations]
+        # adjust channel_ids to match assembly channel indices
         offset = 0
-        for block,p in zip(blocks, self.populations):
+        for block, p in zip(blocks, self.populations):
             for segment in block.segments:
-                #segment.name = name
-                #segment.description = description
-                for signal_array in segment.analogsignalarrays:
-                    signal_array.channel_index = numpy.array(signal_array.channel_index) + offset  # hack
+                for signal_array in segment.analogsignals:
+                    signal_array.channel_index.channel_ids += offset
             offset += p.size
-        for i,block in enumerate(blocks): ##
+        for i, block in enumerate(blocks):
             logger.debug("%d: %s", i, block.name)
-            for j,segment in enumerate(block.segments):
+            for j, segment in enumerate(block.segments):
                 logger.debug("  %d: %s", j, segment.name)
-                for arr in segment.analogsignalarrays:
+                for arr in segment.analogsignals:
                     logger.debug("    %s %s", arr.shape, arr.name)
         merged_block = blocks[0]
         for block in blocks[1:]:
@@ -1328,8 +1365,8 @@ class Assembly(object):
         """
         spike_counts = self.get_spike_counts()
         total_spikes = sum(spike_counts.values())
-        if self._simulator.state.mpi_rank() == 0 or not gather:  # should maybe use allgather, and get the numbers on all nodes
-            return float(total_spikes)/len(spike_counts)
+        if self._simulator.state.mpi_rank == 0 or not gather:  # should maybe use allgather, and get the numbers on all nodes
+            return float(total_spikes) / len(spike_counts)
         else:
             return numpy.nan
 
@@ -1338,12 +1375,12 @@ class Assembly(object):
         Returns the number of spikes for each neuron.
         """
         try:
-            spike_counts = self.populations[0].recorders['spikes'].count(gather, self.populations[0]._record_filter)
+            spike_counts = self.populations[0].recorder.count('spikes', gather, self.populations[0]._record_filter)
         except errors.NothingToWriteError:
             spike_counts = {}
         for p in self.populations[1:]:
             try:
-                spike_counts.update(p.recorders['spikes'].count(gather, p._record_filter))
+                spike_counts.update(p.recorder.count('spikes', gather, p._record_filter))
             except errors.NothingToWriteError:
                 pass
         return spike_counts
@@ -1369,12 +1406,12 @@ class Assembly(object):
         """
         if isinstance(io, basestring):
             io = recording.get_io(io)
-        if gather == False and self._simulator.state.num_processes > 1:
+        if gather is False and self._simulator.state.num_processes > 1:
             io.filename += '.%d' % self._simulator.state.mpi_rank
         logger.debug("Recorder is writing '%s' to file '%s' with gather=%s" % (
                                                variables, io.filename, gather))
         data = self.get_data(variables, gather, clear, annotations)
-        if self._simulator.state.mpi_rank == 0 or gather == False:
+        if self._simulator.state.mpi_rank == 0 or gather is False:
             logger.debug("Writing data to file %s" % io)
             io.write(data)
 
@@ -1396,6 +1433,10 @@ class Assembly(object):
         """
         for p in self.populations:
             current_source.inject_into(p)
+
+    @property
+    def injectable(self):
+        return all(p.injectable for p in self.populations)
 
     def describe(self, template='assembly_default.txt', engine='default'):
         """

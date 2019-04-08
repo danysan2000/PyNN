@@ -1,13 +1,12 @@
 """
 Assorted utility classes and functions.
 
-:copyright: Copyright 2006-2015 by the PyNN team, see AUTHORS.
+:copyright: Copyright 2006-2016 by the PyNN team, see AUTHORS.
 :license: CeCILL, see LICENSE for details.
 """
 
 import warnings
 import numpy
-from pyNN import errors
 
 
 def is_listlike(obj):
@@ -59,11 +58,13 @@ class deprecated(object):
         new_func.__dict__.update(func.__dict__)
         return new_func
 
+
 def reraise(exception, message):
     args = list(exception.args)
     args[0] += message
     exception.args = args
     raise
+
 
 def ezip(*args):
     for items in zip(*args):
@@ -89,3 +90,4 @@ class IndexBasedExpression(object):
 
     def __call__(self, i, j):
         raise NotImplementedError
+

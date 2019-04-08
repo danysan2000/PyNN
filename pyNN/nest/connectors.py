@@ -1,7 +1,7 @@
 """
 Connection method classes for nest
 
-:copyright: Copyright 2006-2015 by the PyNN team, see AUTHORS.
+:copyright: Copyright 2006-2016 by the PyNN team, see AUTHORS.
 :license: CeCILL, see LICENSE for details.
 
 """
@@ -13,7 +13,7 @@ try:
     haveCSA = True
 except ImportError:
     haveCSA = False
-from pyNN import random, core, errors
+from pyNN import random
 from pyNN.connectors import (Connector,
                              AllToAllConnector,
                              FixedProbabilityConnector,
@@ -27,7 +27,8 @@ from pyNN.connectors import (Connector,
                              FromListConnector,
                              FromFileConnector,
                              CloneConnector,
-                             ArrayConnector)
+                             ArrayConnector,
+                             FixedTotalNumberConnector)
 
 from .random import NativeRNG, NEST_RDEV_TYPES
 
@@ -112,7 +113,7 @@ class NESTConnectorMixin(object):
                 if value.is_homogeneous:
                     params[name] = value.evaluate(simplify=True)
                 elif value.shape:
-                    params[name] = value.evaluate().flatten()    # If parameter is given as an array or function
+                    params[name] = value.evaluate().flatten()  # If parameter is given as an array or function
                 else:
                     value.shape = (1, 1)
                     params[name] = float(value.evaluate())  # If parameter is given as a single number. Checking of the dimensions should be done in NEST

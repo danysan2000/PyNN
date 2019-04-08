@@ -1,14 +1,14 @@
 """
 Synapse Dynamics classes for nest
 
-:copyright: Copyright 2006-2015 by the PyNN team, see AUTHORS.
+:copyright: Copyright 2006-2016 by the PyNN team, see AUTHORS.
 :license: CeCILL, see LICENSE for details.
 
 """
 
 import nest
 from pyNN.standardmodels import synapses, build_translations
-from pyNN.nest.synapses import get_synapse_defaults, NESTSynapseMixin
+from pyNN.nest.synapses import NESTSynapseMixin
 import logging
 
 from ..conversion import make_sli_compatible
@@ -30,7 +30,8 @@ class STDPMechanism(synapses.STDPMechanism, NESTSynapseMixin):
     
     base_translations = build_translations(
         ('weight', 'weight', 1000.0),  # nA->pA, uS->nS
-        ('delay', 'delay')
+        ('delay', 'delay'),
+        ('dendritic_delay_fraction', 'dendritic_delay_fraction')
     )  # will be extended by translations from timing_dependence, etc.
     
     def __init__(self, timing_dependence=None, weight_dependence=None,
@@ -45,7 +46,7 @@ class STDPMechanism(synapses.STDPMechanism, NESTSynapseMixin):
                                             voltage_dependence, dendritic_delay_fraction,
                                             weight, delay)
 
-    def _get_nest_synapse_model(self, suffix):
+    def _get_nest_synapse_model(self):
         base_model = self.possible_models
         if isinstance(base_model, set):
             logger.warning("Several STDP models are available for these connections:")
@@ -57,7 +58,7 @@ class STDPMechanism(synapses.STDPMechanism, NESTSynapseMixin):
             raise ValueError("Synapse dynamics model '%s' not a valid NEST synapse model. "
                              "Possible models in your NEST build are: %s" % (base_model, available_models))
 
-        # CopyModel defaults must be simple floats, so we use the NEST defaults
+        # Defaults must be simple floats, so we use the NEST defaults
         # for any inhomogeneous parameters, and set the inhomogeneous values
         # later
         synapse_defaults = {}
@@ -71,10 +72,8 @@ class STDPMechanism(synapses.STDPMechanism, NESTSynapseMixin):
         synapse_defaults.pop("tau_minus")
 
         synapse_defaults = make_sli_compatible(synapse_defaults)
-
-        label = "%s_%s" % (base_model, suffix)
-        nest.CopyModel(base_model, label, synapse_defaults)
-        return label
+        nest.SetDefaults(base_model + '_lbl', synapse_defaults)
+        return base_model + '_lbl'
 
 
 class TsodyksMarkramSynapse(synapses.TsodyksMarkramSynapse, NESTSynapseMixin):
@@ -90,14 +89,49 @@ class TsodyksMarkramSynapse(synapses.TsodyksMarkramSynapse, NESTSynapseMixin):
     nest_name = 'tsodyks_synapse'
 
 
+class SimpleStochasticSynapse(synapses.SimpleStochasticSynapse, NESTSynapseMixin):
+
+    translations = build_translations(
+        ('weight', 'weight', 1000.0),
+        ('delay', 'delay'),
+        ('p', 'p'),
+    )
+    nest_name = 'simple_stochastic_synapse'
+
+
+class StochasticTsodyksMarkramSynapse(synapses.StochasticTsodyksMarkramSynapse, NESTSynapseMixin):
+
+    translations = build_translations(
+        ('weight', 'weight', 1000.0),
+        ('delay', 'delay'),
+        ('U', 'U'),
+        ('tau_rec', 'tau_rec'),
+        ('tau_facil', 'tau_fac')
+    )
+    nest_name = 'stochastic_stp_synapse'
+
+
+class MultiQuantalSynapse(synapses.MultiQuantalSynapse, NESTSynapseMixin):
+
+    translations = build_translations(
+        ('weight', 'weight', 1000.0),
+        ('delay', 'delay'),
+        ('U', 'U'),
+        ('n', 'n'),
+        ('tau_rec', 'tau_rec'),
+        ('tau_facil', 'tau_fac')
+    )
+    nest_name = 'quantal_stp_synapse'
+
+
 class AdditiveWeightDependence(synapses.AdditiveWeightDependence):
     __doc__ = synapses.AdditiveWeightDependence.__doc__
 
     translations = build_translations(
-        ('w_max',     'Wmax',  1000.0), # unit conversion
+        ('w_max',     'Wmax',  1000.0),  # unit conversion
         ('w_min',     'w_min_always_zero_in_NEST'),
     )
-    possible_models = set(['stdp_synapse']) #,'stdp_synapse_hom'])
+    possible_models = set(['stdp_synapse'])  #,'stdp_synapse_hom'])
     extra_parameters = {
         'mu_plus': 0.0,
         'mu_minus': 0.0
@@ -113,14 +147,15 @@ class MultiplicativeWeightDependence(synapses.MultiplicativeWeightDependence):
     __doc__ = synapses.MultiplicativeWeightDependence.__doc__
 
     translations = build_translations(
-        ('w_max',     'Wmax',  1000.0), # unit conversion
+        ('w_max',     'Wmax',  1000.0),  # unit conversion
         ('w_min',     'w_min_always_zero_in_NEST'),
     )
-    possible_models = set(['stdp_synapse']) #,'stdp_synapse_hom'])
+    possible_models = set(['stdp_synapse'])  #,'stdp_synapse_hom'])
     extra_parameters = {
         'mu_plus': 1.0,
         'mu_minus': 1.0
     }
+
     def __init__(self, w_min=0.0, w_max=1.0):
         if w_min != 0:
             raise Exception("Non-zero minimum weight is not supported by NEST.")
@@ -131,7 +166,7 @@ class AdditivePotentiationMultiplicativeDepression(synapses.AdditivePotentiation
     __doc__ = synapses.AdditivePotentiationMultiplicativeDepression.__doc__
 
     translations = build_translations(
-        ('w_max',     'Wmax',  1000.0), # unit conversion
+        ('w_max',     'Wmax',  1000.0),  # unit conversion
         ('w_min',     'w_min_always_zero_in_NEST'),
     )
     possible_models = set(['stdp_synapse']) #,'stdp_synapse_hom'])
@@ -150,7 +185,7 @@ class GutigWeightDependence(synapses.GutigWeightDependence):
     __doc__ = synapses.GutigWeightDependence.__doc__
 
     translations = build_translations(
-        ('w_max',     'Wmax',  1000.0), # unit conversion
+        ('w_max',     'Wmax',  1000.0),  # unit conversion
         ('w_min',     'w_min_always_zero_in_NEST'),
         ('mu_plus',   'mu_plus'),
         ('mu_minus',  'mu_minus'),

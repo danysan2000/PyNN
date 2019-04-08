@@ -33,7 +33,9 @@ from pyNN.utility import assert_arrays_equal
 
 #def test_mpi_sum():
 
+
 class MockState(object):
+
     def __init__(self, mpi_rank):
         self.mpi_rank = mpi_rank
         self.num_processes = 9
@@ -41,17 +43,28 @@ class MockState(object):
         self.running = True
         self.recorders = set([])
         self.t = 0.0
+
+
 class MockSimulator(object):
     name = "MockSimulator"
+
     def __init__(self, mpi_rank):
         self.state = MockState(mpi_rank)
+
 
 class MockNeoIO(object):
     filename = "fake_file"
     write = Mock()
 
+
 class MockRecorder(recording.Recorder):
     _simulator = MockSimulator(mpi_rank=0)
+
+    def _get_current_segment(self, filter_ids=None, variables='all', clear=False):
+        segment = Mock()
+        segment.analogsignals = [Mock(), Mock()]
+        return segment
+
 
 class MockPopulation(object):
     size = 11
@@ -60,26 +73,34 @@ class MockPopulation(object):
     label = "mock population"
     celltype = Mock(always_local=False)
     annotations = {'knights_say': 'Ni!'}
+
     def __len__(self):
         return self.size
+
     def can_record(self, variable):
         if variable in ["spikes", "v", "gsyn_exc", "gsyn_inh", "spam"]:
             return True
         else:
             return False
+
     def id_to_index(self, id):
         return id
+
     def describe(self):
         return "mock population"
 
+
 class MockNeoBlock(object):
+
     def __init__(self):
         self.name = None
         self.description = None
         self.segments = [Mock()]
         self.rec_datetime = datetime.now()
+
     def annotate(self, **annotations):
         pass
+
 
 def test_Recorder_create():
     p = MockPopulation()
@@ -88,6 +109,7 @@ def test_Recorder_create():
     assert_equal(r.file, None)
     assert_equal(r.recorded, defaultdict(set))
     
+
 def test_Recorder_invalid_variable():
     p = MockPopulation()
     r = MockRecorder(p)
@@ -95,10 +117,13 @@ def test_Recorder_invalid_variable():
     assert_raises(errors.RecordingError,
                   r.record, 'foo', all_ids)
 
+
 class MockID(object):
+
     def __init__(self, id, local):
         self.id = id
         self.local = local
+
 
 def test_record():
     p = MockPopulation()
@@ -119,6 +144,7 @@ def test_record():
     assert_equal(len(r.recorded['spam']), 3)
     r._record.assert_called_with('spam', set(all_ids[3:4]), None)
 
+
 def test_filter_recorded():
     p = MockPopulation()
     r = MockRecorder(p)
@@ -134,10 +160,10 @@ def test_filter_recorded():
     
     assert_equal(r.filter_recorded('spikes', None), r.recorded['spikes'])
 
+
 def test_get():
     p = MockPopulation()
     r = MockRecorder(p)
-    r._get_current_segment = Mock()
     data = r.get('spikes')
     assert_equal(data.name, p.label)
     assert_equal(data.description, p.describe())
@@ -153,6 +179,7 @@ def test_get():
 #    r.write("spikes", file=output_io, gather=True)
 #    #recording.Recorder.metadata = orig_metadata
 #    output_io.write.assert_called_with(fake_data)
+
 
 def test_metadata_property():
     p = MockPopulation()
